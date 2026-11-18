@@ -434,12 +434,11 @@ pub fn spectrum_slider(
 /// Renders the refined-vs-original diff as a single wrapped text flow:
 /// one layout job so all sections wrap at the true panel width, with
 /// opaque Spectrum red/green subtle backgrounds behind the changed runs.
-/// The strikethrough on deleted text is painted per character via
-/// `Galley::pos_from_cursor`, seated at ~78% of the row height - egui's
-/// built-in strike rides at the em-center and reads too high.
+/// The strikethrough is painted from the galley's own glyph data: the
+/// strike spans each deleted run exactly as the run's background does
+/// (glyph edges plus the same 1px `expand_bg` pad), seated slightly below
+/// mid-x-height, anchored on the glyph baseline.
 pub fn render_diff_view(ui: &mut Ui, chunks: &[DiffChunk], theme: &SpectrumTheme) {
-    use eframe::egui::text::CCursor;
-
     if chunks.is_empty() {
         return;
     }
@@ -479,26 +478,50 @@ pub fn render_diff_view(ui: &mut Ui, chunks: &[DiffChunk], theme: &SpectrumTheme
     let origin = rect.min;
     ui.painter().galley(origin, galley.clone(), Color32::WHITE);
 
-    // Strikethrough pass over the deleted ranges, per character so the
-    // line breaks exactly where wrapping breaks a deleted run.
-    for (cs, ce) in del_ranges {
-        for c in cs..ce {
-            let r0 = galley.pos_from_cursor(CCursor::new(c));
-            let r1 = galley.pos_from_cursor(CCursor::new(c + 1));
-            if r0.min.y != r1.min.y {
-                continue; // wrapped or newline: no strike on the gap
+    // Strikethrough pass. Runs are built from the galley glyph stream so
+    // each strike piece spans its deleted run edge-to-edge with the run's
+    // background (glyph edges + the same 1px pad egui gives backgrounds),
+    // breaking exactly where wrapping breaks the run.
+    let in_del = |c: usize| del_ranges.iter().any(|(s, e)| c >= *s && c < *e);
+    let mut base = 0usize; // chars covered by all previous rows
+    for placed in &galley.rows {
+        let glyphs = &placed.row.glyphs;
+        let mut run: Option<(usize, usize)> = None; // glyph index range
+
+        let strike_run = |placed: &eframe::egui::epaint::text::PlacedRow,
+                              glyphs: &Vec<eframe::egui::epaint::text::Glyph>,
+                              run: (usize, usize),
+                              painter: &egui::Painter| {
+            let (a, b) = run;
+            let first = &glyphs[a];
+            let last = &glyphs[b - 1];
+            let baseline = placed.pos.y + first.pos.y;
+            let x0 = placed.pos.x + first.pos.x - 1.0;
+            let x1 = placed.pos.x + last.pos.x + last.advance_width + 1.0;
+            let y = origin.y + baseline - first.font_ascent * 0.25;
+            if x1 > x0 {
+                painter.line_segment(
+                    [Pos2::new(origin.x + x0, y), Pos2::new(origin.x + x1, y)],
+                    Stroke::new(1.0, theme.diff_del_text),
+                );
             }
-            let x0 = origin.x + r0.min.x;
-            let x1 = origin.x + r1.min.x;
-            if x1 <= x0 + 0.5 {
-                continue; // whitespace-only / zero-width caret step
+        };
+
+        for (gi, _glyph) in glyphs.iter().enumerate() {
+            if in_del(base + gi) {
+                match run.as_mut() {
+                    Some((_, ref mut b)) => *b = gi + 1,
+                    None => run = Some((gi, gi + 1)),
+                }
+            } else if let Some(r) = run.take() {
+                strike_run(placed, glyphs, r, ui.painter());
             }
-            let y = origin.y + r0.min.y + r0.height() * 0.78;
-            ui.painter().line_segment(
-                [Pos2::new(x0, y), Pos2::new(x1, y)],
-                Stroke::new(1.0, theme.diff_del_text),
-            );
         }
+        if let Some(r) = run.take() {
+            strike_run(placed, glyphs, r, ui.painter());
+        }
+
+        base += glyphs.len() + placed.ends_with_newline as usize;
     }
 }
 

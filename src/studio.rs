@@ -427,7 +427,11 @@ impl Studio {
         // dashboards reserve color for actions, not digits.
         let available_w = ui.available_width();
         let gap = 12.0;
-        let side_margin = 28.0; // inner_margin(14) painted on both sides
+        // inner_margin(14) painted on both sides PLUS the 1px frame stroke
+        // on each side: 30 px per card. Subtracting only 28 made this row
+        // overshoot the dashboard cards below by ~8px, whose own row came
+        // up 4px short - the right edges visibly failed to stack.
+        let side_margin = 30.0;
         let per_row = if available_w >= 182.0 * 4.0 + gap * 3.0 + side_margin * 4.0 {
             4
         } else {
@@ -473,9 +477,11 @@ impl Studio {
 
         // 2. Two-Column Dashboard: Real Activity Bar Chart (Left) + Action Breakdown (Right)
         let col_gap = 16.0;
-        // The frames paint inner_margin(16) on each side (64 px across the
-        // two panels); subtract it or the right panel gets pushed off-screen.
-        let frame_margins = 64.0;
+        // Each card paints inner_margin(16) on both sides (=32) PLUS its
+        // 1px stroke on both sides: 34 px per card, 68 across both. With
+        // that subtracted, this row's right edge stacks exactly with the
+        // metric-card row above it.
+        let frame_margins = 68.0;
         let left_w = (available_w - col_gap - frame_margins) * 0.58;
         let right_w = (available_w - col_gap - frame_margins) * 0.42;
 
