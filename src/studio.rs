@@ -6,7 +6,7 @@ use crate::groq::{available_reasoning_efforts, fetch_chat_models, GroqConfig, Gr
 use crate::history::HistoryEntry;
 use crate::stats::calculate_stats;
 use crate::store::{Store, ThemeMode};
-use crate::theme::{card_frame, icons, render_diff_view, render_rf_logo, spectrum_badge, spectrum_button, spectrum_slider, spectrum_switch, SpectrumTheme};
+use crate::theme::{card_frame, icons, render_diff_view, render_rf_logo, spectrum_badge, spectrum_button, spectrum_button_compact, spectrum_slider, spectrum_switch, SpectrumTheme};
 use eframe::egui::{
     self, Align, Align2, Color32, CornerRadius, FontId, Key, Layout, Pos2, Rect, RichText,
     ScrollArea, Sense, Stroke, Ui, Vec2,
@@ -331,7 +331,7 @@ impl Studio {
                                         delete_id = Some(entry.id.clone());
                                     }
 
-                                    if spectrum_button(
+                                    if spectrum_button_compact(
                                         ui,
                                         Some(icons::EYE),
                                         if is_expanded { "Hide changes" } else { "Show changes" },
@@ -343,7 +343,7 @@ impl Studio {
                                         toggle_diff_id = Some(entry.id.clone());
                                     }
 
-                                    if spectrum_button(ui, Some(icons::COPY), "Copy", false, theme)
+                                    if spectrum_button_compact(ui, Some(icons::COPY), "Copy", false, theme)
                                         .clicked()
                                     {
                                         crate::clipboard::set_clipboard_text(&entry.refined_text);
@@ -351,7 +351,7 @@ impl Studio {
                                 });
                             });
 
-                            ui.add_space(6.0);
+                            ui.add_space(4.0);
 
                             // Content preview
                             if is_expanded {
@@ -409,7 +409,7 @@ impl Studio {
             .auto_shrink([false, false])
             .show(ui, |ui| {
                 ui.set_width(ui.available_width());
-                self.render_statistics_content(ui, theme, &stats);
+                self.render_statistics_content(ui, theme, &stats, &store.settings.actions);
             });
     }
 
@@ -418,6 +418,7 @@ impl Studio {
         ui: &mut Ui,
         theme: &SpectrumTheme,
         stats: &crate::stats::AggregatedStats,
+        actions: &[crate::actions::ActionItem],
     ) {
         ui.add_space(12.0);
 
@@ -518,10 +519,10 @@ impl Studio {
                         }
 
                         // Bars grow from a shared baseline; the count rides
-                        // above the bar, the day label below it. One single
-                        // hit-tested hover for the whole plot - per-bar
-                        // interactive rects made the hover state flicker
-                        // between bars of equal height.
+                        // above the bar, the day label below it. No hover
+                        // tooltip at all: the counts are printed inline, and a
+                        // popup near the baseline sat right on top of the day
+                        // labels and flickered them.
                         let max_count = stats
                             .daily_counts
                             .iter()
@@ -531,32 +532,13 @@ impl Studio {
                             .max(1) as f32;
                         let plot_h = 120.0;
                         let label_band = 22.0;
-                        let (plot_rect, plot_resp) = ui.allocate_exact_size(
+                        let (plot_rect, _) = ui.allocate_exact_size(
                             Vec2::new(ui.available_width(), plot_h + label_band),
                             Sense::hover(),
                         );
                         let plot_w = plot_rect.width();
                         let slot = plot_w / 7.0;
                         let baseline = plot_rect.bottom() - label_band;
-
-                        let hovered_day = plot_resp
-                            .hovered()
-                            .then(|| {
-                                ui.input(|i| i.pointer.hover_pos())
-                                    .map(|p| {
-                                        ((p.y <= baseline) as u16,
-                                         (p.x - plot_rect.left()) / slot)
-                                    })
-                            })
-                            .flatten()
-                            .and_then(|(in_band, slot_idx)| {
-                                if in_band == 1 {
-                                    let idx = slot_idx.floor() as usize;
-                                    stats.daily_counts.get(idx)
-                                } else {
-                                    None
-                                }
-                            });
 
                         for (i, (day, count)) in stats.daily_counts.iter().enumerate() {
                             let ratio = (*count as f32 / max_count).clamp(0.04, 1.0);
@@ -567,16 +549,8 @@ impl Studio {
                                 Pos2::new(cx - bar_w / 2.0, baseline - bar_h),
                                 Pos2::new(cx + bar_w / 2.0, baseline),
                             );
-                            let hovered = hovered_day
-                                .as_ref()
-                                .map(|(d, _)| d == day)
-                                .unwrap_or(false);
                             let bar_color = if *count > 0 {
-                                if hovered {
-                                    theme.accent_hover
-                                } else {
-                                    theme.accent
-                                }
+                                theme.accent
                             } else {
                                 theme.surface_active
                             };
@@ -609,11 +583,6 @@ impl Studio {
                                 day_galley,
                                 Color32::WHITE,
                             );
-                        }
-
-                        if let Some((day, count)) = hovered_day {
-                            plot_resp
-                                .on_hover_text(format!("{day}: {count} refinements"));
                         }
                     });
                 });
@@ -650,11 +619,26 @@ impl Studio {
                         }
 
                         let total = stats.total_refinements.max(1) as f32;
-                        let mut sorted_actions: Vec<(String, usize)> =
-                            stats.action_counts.iter().map(|(k, v)| (k.clone(), *v)).collect();
-                        sorted_actions.sort_by(|a, b| b.1.cmp(&a.1));
+                        // Every action appears - unused ones at 0 - so the
+                        // panel keeps its full shape instead of collapsing
+                        // to the single action that happens to have counts.
+                        let mut rows: Vec<(String, usize)> = actions
+                            .iter()
+                            .map(|a| {
+                                (
+                                    a.name.clone(),
+                                    *stats.action_counts.get(&a.name).unwrap_or(&0),
+                                )
+                            })
+                            .collect();
+                        for (k, v) in &stats.action_counts {
+                            if !rows.iter().any(|(n, _)| n == k) {
+                                rows.push((k.clone(), *v));
+                            }
+                        }
+                        rows.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
 
-                        for (action_name, count) in sorted_actions.iter().take(5) {
+                        for (action_name, count) in rows.iter().take(8) {
                             let pct = (*count as f32 / total) * 100.0;
                             ui.horizontal(|ui| {
                                 ui.label(RichText::new(action_name).font(FontId::proportional(12.0)).color(theme.text_primary));
@@ -1061,7 +1045,7 @@ impl Studio {
                             }
                             ui.label(
                                 RichText::new(format!("{:.2}", store.settings.groq.temperature))
-                                    .font(FontId::monospace(12.0))
+                                    .font(FontId::proportional(12.0))
                                     .color(theme.text_secondary),
                             );
                             ui.end_row();
@@ -1073,7 +1057,7 @@ impl Studio {
                             }
                             ui.label(
                                 RichText::new(format!("{:.2}", store.settings.groq.top_p))
-                                    .font(FontId::monospace(12.0))
+                                    .font(FontId::proportional(12.0))
                                     .color(theme.text_secondary),
                             );
                             ui.end_row();

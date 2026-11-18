@@ -250,7 +250,7 @@ pub fn render_rf_logo(ui: &mut Ui, size: f32) {
 }
 
 /// Spectrum 2 button: always carries an icon + label so no call site can end
-/// up inconsistent. Pill-shaped, 32px tall, accent fill only when primary.
+/// up inconsistent. Pill-shaped, accent fill only when primary.
 pub fn spectrum_button(
     ui: &mut Ui,
     icon: Option<&str>,
@@ -258,12 +258,36 @@ pub fn spectrum_button(
     primary: bool,
     theme: &SpectrumTheme,
 ) -> Response {
+    styled_button(ui, icon, label, primary, 32.0, 13.0, theme)
+}
+
+/// Compact density variant for in-row controls (e.g. history card headers),
+/// so buttons do not tower over the surrounding text.
+pub fn spectrum_button_compact(
+    ui: &mut Ui,
+    icon: Option<&str>,
+    label: &str,
+    primary: bool,
+    theme: &SpectrumTheme,
+) -> Response {
+    styled_button(ui, icon, label, primary, 26.0, 12.0, theme)
+}
+
+fn styled_button(
+    ui: &mut Ui,
+    icon: Option<&str>,
+    label: &str,
+    primary: bool,
+    height: f32,
+    font_size: f32,
+    theme: &SpectrumTheme,
+) -> Response {
     let text = match icon {
         Some(ic) => format!("{ic}  {label}"),
         None => label.to_string(),
     };
     let rich = RichText::new(text)
-        .font(FontId::proportional(13.0))
+        .font(FontId::proportional(font_size))
         .color(if primary { Color32::WHITE } else { theme.text_primary });
     let rich = if primary { rich.strong() } else { rich };
 
@@ -276,7 +300,7 @@ pub fn spectrum_button(
             .fill(theme.surface_elevated)
             .stroke(Stroke::new(1.0, theme.border))
     };
-    ui.add(button.min_size(Vec2::new(0.0, 32.0)))
+    ui.add(button.min_size(Vec2::new(0.0, height)))
 }
 
 /// Spectrum 2 sliding switch (pill track, white knob).
@@ -351,9 +375,9 @@ pub fn spectrum_slider(
     step: f32,
     theme: &SpectrumTheme,
 ) -> Response {
-    let width = ui.available_width().min(280.0);
+    let width = ui.available_width().min(320.0);
     let (rect, mut response) =
-        ui.allocate_exact_size(Vec2::new(width, 24.0), Sense::drag());
+        ui.allocate_exact_size(Vec2::new(width, 20.0), Sense::drag());
 
     if response.dragged() {
         if let Some(p) = response.interact_pointer_pos() {
@@ -379,7 +403,7 @@ pub fn spectrum_slider(
             Pos2::new(rect.right(), cy + 2.0),
         ),
         CornerRadius::same(2),
-        theme.surface_subtle,
+        theme.surface_active,
     );
     // Trailing fill
     let fill_x = rect.left() + t * rect.width();
@@ -391,8 +415,9 @@ pub fn spectrum_slider(
         CornerRadius::same(2),
         theme.accent,
     );
-    // Knob
-    let knob_r = 8.0;
+    // Knob: small solid circle so it reads as part of the track, not a
+    // separate black puck.
+    let knob_r = 6.0;
     let knob_x = fill_x.clamp(rect.left() + knob_r, rect.right() - knob_r);
     ui.painter().circle(
         Pos2::new(knob_x, cy),
