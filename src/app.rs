@@ -73,7 +73,6 @@ impl RefinedApp {
     pub fn new(
         cc: &eframe::CreationContext,
         store: Arc<Mutex<Store>>,
-        hotkey_rx: Receiver<TriggerPayload>,
         hotkey_failed: Arc<AtomicBool>,
         restore_event: HANDLE,
         quitting: Arc<AtomicBool>,
@@ -81,8 +80,20 @@ impl RefinedApp {
         #[cfg_attr(not(feature = "demo"), allow(unused_variables))]
         demo_opts: DemoOptions,
     ) -> Self {
+        use std::sync::mpsc;
+
         // Setup Segoe UI system fonts
         theme::setup_custom_fonts(&cc.egui_ctx);
+
+        // Hotkey listener: started here, not in main, because it needs the
+        // egui context to wake the UI for immediate HUD opens on Alt+V.
+        let (hotkey_tx, hotkey_rx) = mpsc::channel();
+        let _hotkey_handle = crate::hotkey::start_hotkey_listener(
+            cc.egui_ctx.clone(),
+            hotkey_tx,
+            quitting.clone(),
+            hotkey_failed.clone(),
+        );
 
         let studio_open = Arc::new(AtomicBool::new(initially_visible));
         let tray = Tray::new(cc.egui_ctx.clone(), quitting.clone(), studio_open.clone());

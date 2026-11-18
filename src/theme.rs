@@ -170,10 +170,19 @@ pub fn configure_egui_theme(ctx: &egui::Context, theme: &SpectrumTheme) {
     v.widgets.active.fg_stroke = Stroke::new(1.0, theme.text_primary);
     v.widgets.active.corner_radius = CornerRadius::same(4);
 
-    v.widgets.open.bg_fill = theme.surface_hover;
+    // The "open" state doubles as the ComboBox DROPDOWN menu surface:
+    // elevated fill + real border, like any Spectrum popover. egui's
+    // default menu fill here looked like a plain black slab.
+    v.widgets.open.bg_fill = theme.surface_elevated;
+    v.widgets.open.bg_stroke = Stroke::new(1.0, theme.border);
+    v.widgets.open.fg_stroke = Stroke::new(1.0, theme.text_primary);
+    v.widgets.open.corner_radius = CornerRadius::same(6);
 
-    v.selection.bg_fill = theme.accent;
-    v.selection.stroke = Stroke::new(1.0, theme.accent_hover);
+    // Selection tokens feed a dropdown's SELECTED item (and the
+    // text-selection highlight): the Spectrum blue-800/200 badge pair -
+    // the raw accent fill with white text was below readable contrast.
+    v.selection.bg_fill = theme.accent_badge_bg;
+    v.selection.stroke = Stroke::new(1.0, theme.accent_badge_text);
 
     ctx.set_visuals(v);
 }

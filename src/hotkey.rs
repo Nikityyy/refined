@@ -28,7 +28,11 @@ pub struct TriggerPayload {
 }
 
 /// `stopping` is the app's quit flag: the listener runs while it is false.
+/// The egui context is how this thread wakes the UI: without the explicit
+/// repaint request, the payload sits in the channel until something else
+/// makes the app paint, and the HUD opens arbitrarily late.
 pub fn start_hotkey_listener(
+    ctx: eframe::egui::Context,
     sender: Sender<TriggerPayload>,
     stopping: Arc<AtomicBool>,
     failed: Arc<AtomicBool>,
@@ -69,6 +73,9 @@ pub fn start_hotkey_listener(
                             cursor_y: pt.y,
                             target_hwnd: cap.target_hwnd.0 as isize,
                         });
+                        // Wake the UI thread NOW so the palette opens
+                        // immediately, not whenever the next frame happens.
+                        ctx.request_repaint();
                     }
                 }
                 let _ = TranslateMessage(&msg);

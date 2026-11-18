@@ -18,7 +18,6 @@ mod tray;
 mod updater;
 
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::channel;
 use std::sync::{Arc, Mutex};
 use windows::core::{w, PCWSTR};
 use windows::Win32::Foundation::{CloseHandle, GetLastError, ERROR_ALREADY_EXISTS};
@@ -168,6 +167,19 @@ fn demo_only_modes() -> bool {
 }
 
 fn main() -> eframe::Result {
+    // Panics in a GUI-subsystem app vanish silently; log them so any crash
+    // the user reports can be diagnosed from a file.
+    std::panic::set_hook(Box::new(|info| {
+        let dir = std::env::var("LOCALAPPDATA")
+            .map(|d| format!("{d}\\Refined"))
+            .unwrap_or_else(|_| ".".to_string());
+        let _ = std::fs::create_dir_all(&dir);
+        let _ = std::fs::write(
+            format!("{dir}\\panic.log"),
+            format!("{info}\n"),
+        );
+    }));
+
     // Single instance mutex and restore event
     let restore_event = unsafe { CreateEventW(None, false, false, RESTORE_EVENT) }.expect("restore event");
     let instance = unsafe { CreateMutexW(None, true, INSTANCE_MUTEX) }.expect("instance mutex");
@@ -194,11 +206,11 @@ fn main() -> eframe::Result {
     // Load store
     let store = Arc::new(Mutex::new(store::Store::open()));
 
-    // Hotkey listener thread
-    let (hotkey_tx, hotkey_rx) = channel();
+    // The hotkey listener is started inside RefinedApp::new: it needs the
+    // egui context to wake the UI on Alt+V, so registration must happen
+    // where the context exists.
     let quitting = Arc::new(AtomicBool::new(false));
     let hotkey_failed = Arc::new(AtomicBool::new(false));
-    let _hotkey_handle = hotkey::start_hotkey_listener(hotkey_tx, quitting.clone(), hotkey_failed.clone());
 
     // Window options
     let hidden = std::env::args().any(|a| a == "--hidden");
@@ -239,7 +251,6 @@ fn main() -> eframe::Result {
             Ok(Box::new(app::RefinedApp::new(
                 cc,
                 store_for_app,
-                hotkey_rx,
                 hotkey_failed_for_app,
                 restore_event,
                 quitting_for_app,
