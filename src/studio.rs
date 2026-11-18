@@ -930,11 +930,13 @@ impl Studio {
                                         }
                                     }
                                 } else {
+                                    // Shown only until the user fetches the
+                                    // live list; does not include models that
+                                    // Groq has retired.
                                     let defaults = [
                                         "openai/gpt-oss-120b",
-                                        "llama-3.3-70b-versatile",
-                                        "llama-3.1-8b-instant",
-                                        "mixtral-8x7b-32768",
+                                        "openai/gpt-oss-20b",
+                                        "qwen/qwen3.8-27b",
                                     ];
                                     for m in defaults {
                                         if ui.selectable_value(&mut store.settings.groq.model, m.to_string(), m).clicked() {

@@ -136,7 +136,7 @@ impl Hud {
             }
             HudState::RewriteAsInput { .. } => 210.0,
             HudState::Processing { .. } => 150.0,
-            HudState::DiffView { .. } => 380.0,
+            HudState::DiffView { .. } => 430.0,
         }
     }
 
@@ -511,61 +511,108 @@ impl Hud {
                 model,
                 duration_ms,
             } => {
-                ui.horizontal(|ui| {
-                    spectrum_badge(ui, &format!("{} Replaced in place", icons::CHECK_MARK), theme.diff_add_bg, theme.diff_add_text);
-                    ui.add_space(4.0);
-                    spectrum_badge(ui, action_name, theme.accent_subtle, theme.accent);
+                // Layout follows the Notion AI / Google Docs pattern: one calm
+                // headline stating what happened, one sentence telling the user
+                // their text was already replaced and undo is available, then
+                // the inline diff, then three clear verbs.
+                let secs = *duration_ms as f64 / 1000.0;
+                let duration_str = if secs >= 1.0 {
+                    format!("{secs:.1} s")
+                } else {
+                    format!("{duration_ms} ms")
+                };
+                let model_short = model.split('/').next_back().unwrap_or(model);
 
+                ui.horizontal(|ui| {
+                    ui.label(
+                        RichText::new(icons::CHECK_MARK)
+                            .font(FontId::proportional(15.0))
+                            .color(theme.diff_add_text),
+                    );
+                    ui.label(
+                        RichText::new(format!("{action_name} applied"))
+                            .font(FontId::proportional(15.0))
+                            .color(theme.text_primary)
+                            .strong(),
+                    );
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         ui.label(
-                            RichText::new(format!("{}ms • {}", duration_ms, model))
+                            RichText::new(format!("{} · {}", duration_str, model_short))
                                 .font(FontId::proportional(12.0))
-                                .color(theme.text_secondary),
+                                .color(theme.text_tertiary),
                         );
                     });
                 });
 
-                ui.add_space(4.0);
-
                 let delta = stats.word_delta();
-                let delta_str = if delta >= 0 {
-                    format!("+{} words (+{:.1}%)", delta, stats.percent_change())
+                let changed = diff_chunks
+                    .iter()
+                    .filter(|c| !matches!(c.kind, crate::diff::DiffKind::Equal))
+                    .count();
+                let change_str = if delta == 0 {
+                    format!("{changed} word change{}", if changed == 1 { "" } else { "s" })
+                } else if delta > 0 {
+                    format!("{changed} changes, +{delta} words")
                 } else {
-                    format!("{} words ({:.1}%)", delta, stats.percent_change())
+                    format!("{changed} changes, {delta} words")
                 };
                 ui.label(
                     RichText::new(format!(
-                        "{} → {} words ({})",
-                        stats.original_words, stats.refined_words, delta_str
+                        "{change_str} · replaced in your text — {} → {} words",
+                        stats.original_words, stats.refined_words
                     ))
                     .font(FontId::proportional(12.0))
-                    .color(if delta <= 0 { theme.diff_add_text } else { theme.accent })
-                    .strong(),
+                    .color(theme.text_secondary),
                 );
 
-                ui.add_space(6.0);
+                ui.add_space(10.0);
 
                 egui::ScrollArea::vertical()
-                    .max_height(220.0)
+                    .max_height(200.0)
+                    .auto_shrink([false, false])
                     .show(ui, |ui| {
                         egui::Frame::new()
                             .fill(theme.surface_elevated)
-                            .corner_radius(CornerRadius::same(6))
-                            .inner_margin(egui::Margin::same(10))
+                            .corner_radius(CornerRadius::same(8))
+                            .inner_margin(egui::Margin::same(12))
                             .show(ui, |ui| {
                                 render_diff_view(ui, diff_chunks, theme);
                             });
                     });
 
-                ui.add_space(8.0);
+                ui.add_space(10.0);
                 ui.horizontal(|ui| {
-                    if spectrum_button(ui, &format!("{} Copy [Ctrl+C]", icons::COPY), false, theme).clicked()
+                    if ui
+                        .add_sized(
+                            [118.0, 28.0],
+                            egui::Button::new(
+                                RichText::new(format!("{} Copy  Ctrl+C", icons::COPY))
+                                    .font(FontId::proportional(12.0))
+                                    .color(theme.text_primary),
+                            )
+                            .fill(theme.surface_elevated)
+                            .stroke(Stroke::new(1.0, theme.border))
+                            .corner_radius(CornerRadius::same(6)),
+                        )
+                        .clicked()
                         || (ctx.input(|i| i.modifiers.command && i.key_pressed(Key::C)))
                     {
                         crate::clipboard::set_clipboard_text(refined_text);
                     }
 
-                    if spectrum_button(ui, "Undo Replacement [Ctrl+Z]", false, theme).clicked()
+                    if ui
+                        .add_sized(
+                            [118.0, 28.0],
+                            egui::Button::new(
+                                RichText::new("Undo  Ctrl+Z")
+                                    .font(FontId::proportional(12.0))
+                                    .color(theme.text_primary),
+                            )
+                            .fill(theme.surface_elevated)
+                            .stroke(Stroke::new(1.0, theme.border))
+                            .corner_radius(CornerRadius::same(6)),
+                        )
+                        .clicked()
                         || (ctx.input(|i| i.modifiers.command && i.key_pressed(Key::Z)))
                     {
                         let hwnd = HWND(self.target_hwnd as *mut std::ffi::c_void);
@@ -573,11 +620,32 @@ impl Hud {
                     }
 
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if spectrum_button(ui, "Done [Esc]", true, theme).clicked() {
+                        if ui
+                            .add_sized(
+                                [96.0, 28.0],
+                                egui::Button::new(
+                                    RichText::new("Done  Esc")
+                                        .font(FontId::proportional(12.0))
+                                        .color(Color32::WHITE)
+                                        .strong(),
+                                )
+                                .fill(theme.accent)
+                                .stroke(Stroke::NONE)
+                                .corner_radius(CornerRadius::same(6)),
+                            )
+                            .clicked()
+                        {
                             should_close.set(true);
                         }
                     });
                 });
+
+                ui.add_space(2.0);
+                ui.label(
+                    RichText::new("Undo replaces the selection with your original text.")
+                        .font(FontId::proportional(12.0))
+                        .color(theme.text_tertiary),
+                );
             }
         }
 

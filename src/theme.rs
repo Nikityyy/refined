@@ -342,7 +342,12 @@ pub fn render_diff_view(ui: &mut Ui, chunks: &[DiffChunk], theme: &SpectrumTheme
                 DiffKind::Delete => {
                     ui.scope(|ui| {
                         egui::Frame::new()
-                            .fill(theme.diff_del_bg)
+                            .fill(egui::Color32::from_rgba_premultiplied(
+                                theme.diff_del_text.r(),
+                                theme.diff_del_text.g(),
+                                theme.diff_del_text.b(),
+                                14,
+                            ))
                             .corner_radius(CornerRadius::same(3))
                             .inner_margin(egui::Margin::symmetric(3, 1))
                             .show(ui, |ui| {
@@ -358,15 +363,19 @@ pub fn render_diff_view(ui: &mut Ui, chunks: &[DiffChunk], theme: &SpectrumTheme
                 DiffKind::Insert => {
                     ui.scope(|ui| {
                         egui::Frame::new()
-                            .fill(theme.diff_add_bg)
+                            .fill(egui::Color32::from_rgba_premultiplied(
+                                theme.diff_add_text.r(),
+                                theme.diff_add_text.g(),
+                                theme.diff_add_text.b(),
+                                18,
+                            ))
                             .corner_radius(CornerRadius::same(3))
                             .inner_margin(egui::Margin::symmetric(3, 1))
                             .show(ui, |ui| {
                                 ui.label(
                                     RichText::new(&chunk.text)
                                         .color(theme.diff_add_text)
-                                        .font(FontId::proportional(14.0))
-                                        .strong(),
+                                        .font(FontId::proportional(14.0)),
                                 );
                             });
                     });

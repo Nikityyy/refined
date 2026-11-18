@@ -30,6 +30,7 @@ impl DiffStats {
         self.refined_words as isize - self.original_words as isize
     }
 
+    #[allow(dead_code)]
     pub fn percent_change(&self) -> f32 {
         if self.original_words == 0 {
             return 0.0;

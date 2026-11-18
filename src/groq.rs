@@ -140,6 +140,7 @@ pub fn fetch_chat_models(api_key: &str) -> Result<Vec<GroqModel>, String> {
                 || lower.contains("guard")
                 || lower.contains("safeguard")
                 || lower.contains("moderation")
+                || lower.contains("orpheus")
             {
                 return false;
             }
@@ -195,9 +196,6 @@ pub fn complete_action(
         Some(config.reasoning_effort.clone())
     };
 
-    // Clamp token limit safely for Groq model context limits
-    let clamped_tokens = config.max_completion_tokens.clamp(256, 32768);
-
     let mut req_body = ChatCompletionRequest {
         model: config.model.clone(),
         messages: vec![
@@ -211,7 +209,7 @@ pub fn complete_action(
             },
         ],
         temperature: config.temperature,
-        max_completion_tokens: clamped_tokens,
+        max_completion_tokens: config.max_completion_tokens.clamp(256, 32768),
         top_p: config.top_p,
         reasoning_effort: effort,
         stream: false,
@@ -221,32 +219,55 @@ pub fn complete_action(
     let url = "https://api.groq.com/openai/v1/chat/completions";
     let start = Instant::now();
 
-    let resp = ureq::post(url)
-        .header("Authorization", &format!("Bearer {key}"))
-        .header("Content-Type", "application/json")
-        .send_json(&req_body);
+    // Fallback ladder: some models reject `reasoning_effort` and/or have
+    // context windows smaller than the requested token budget (HTTP 400).
+    // Retry with the effort dropped, then with progressively smaller budgets,
+    // so every chat model in the live list actually works.
+    let mut attempts: Vec<(Option<String>, u32)> = vec![
+        (req_body.reasoning_effort.clone(), req_body.max_completion_tokens),
+        (None, req_body.max_completion_tokens),
+        (req_body.reasoning_effort.clone(), 16384),
+        (None, 8192),
+        (None, 4096),
+    ];
+    attempts.dedup();
 
-    let res = match resp {
-        Ok(r) => r,
-        Err(e) => {
-            // If the model rejected reasoning_effort, retry without it
-            if req_body.reasoning_effort.is_some() {
-                req_body.reasoning_effort = None;
-                match ureq::post(url)
-                    .header("Authorization", &format!("Bearer {key}"))
-                    .header("Content-Type", "application/json")
-                    .send_json(&req_body)
-                {
-                    Ok(r) => r,
-                    Err(e2) => return Err(format!("Groq API error: {e2}")),
+    let mut last_err = String::new();
+    let res = loop {
+        let Some((effort, tokens)) = attempts.first().cloned() else {
+            break Err(format!("Groq API error: {last_err}"));
+        };
+        req_body.reasoning_effort = effort;
+        req_body.max_completion_tokens = tokens;
+
+        match ureq::post(url)
+            .header("Authorization", &format!("Bearer {key}"))
+            .header("Content-Type", "application/json")
+            .send_json(&req_body)
+        {
+            Ok(r) => break Ok(r),
+            Err(e) => {
+                last_err = e.to_string();
+                // Only fall back on parameter-rejection style errors; on
+                // auth/quota/network failures retrying is pointless.
+                let msg = last_err.to_lowercase();
+                if !msg.contains("400") && !msg.contains("bad request") {
+                    break Err(format!("Groq API error: {last_err}"));
                 }
-            } else {
-                return Err(format!("Groq API error: {e}"));
+                if attempts.len() > 1 {
+                    attempts.remove(0);
+                } else {
+                    break Err(format!("Groq API error: {last_err}"));
+                }
             }
         }
     };
 
     let duration_ms = start.elapsed().as_millis();
+    let res = match res {
+        Ok(r) => r,
+        Err(e) => return Err(e),
+    };
     let body: ChatCompletionResponse = res
         .into_body()
         .read_json()
