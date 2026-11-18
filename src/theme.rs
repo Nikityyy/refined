@@ -32,6 +32,8 @@ pub mod icons {
     pub const CLEAR: &str = "\u{E8E6}";
     pub const REPAIR: &str = "\u{E90F}";
     pub const ADD: &str = "\u{E710}";
+    pub const UP: &str = "\u{E70E}";
+    pub const DOWN: &str = "\u{E70D}";
     pub const DOWNLOAD: &str = "\u{E896}";
     pub const SAVE: &str = "\u{E74E}";
     pub const EYE: &str = "\u{E7B3}";

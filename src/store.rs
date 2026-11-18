@@ -122,18 +122,42 @@ impl Store {
 
     pub fn add_custom_action(&mut self, action: ActionItem) {
         self.settings.actions.push(action);
+        self.renumber_action_keys();
         self.save_settings();
+    }
+
+    pub fn delete_custom_action(&mut self, id: &str) {
+        self.settings.actions.retain(|a| a.id != id);
+        self.renumber_action_keys();
+        self.save_settings();
+    }
+
+    /// Action order is user-defined (Studio), so the number shortcuts are
+    /// positional: row 1 answers to key 1, whatever the action is.
+    pub fn move_action(&mut self, from: usize, to: usize) {
+        if from == to || from >= self.settings.actions.len() || to >= self.settings.actions.len()
+        {
+            return;
+        }
+        self.settings.actions.swap(from, to);
+        self.renumber_action_keys();
+        self.save_settings();
+    }
+
+    fn renumber_action_keys(&mut self) {
+        for (i, action) in self.settings.actions.iter_mut().enumerate() {
+            action.shortcut = if i < 9 {
+                (i + 1).to_string()
+            } else {
+                String::new()
+            };
+        }
     }
 
     pub fn reset_action_to_default(&mut self, id: &str) {
         if let Some(action) = self.settings.actions.iter_mut().find(|a| a.id == id) {
             action.reset_to_default();
         }
-        self.save_settings();
-    }
-
-    pub fn delete_custom_action(&mut self, id: &str) {
-        self.settings.actions.retain(|a| a.id != id);
         self.save_settings();
     }
 }

@@ -41,7 +41,6 @@ pub struct Studio {
     pub new_action_name: String,
     pub new_action_desc: String,
     pub new_action_icon: String,
-    pub new_action_shortcut: String,
     pub new_action_prompt: String,
 }
 
@@ -63,7 +62,6 @@ impl Studio {
             new_action_name: String::new(),
             new_action_desc: String::new(),
             new_action_icon: "✨".to_string(),
-            new_action_shortcut: String::new(),
             new_action_prompt: String::new(),
         }
     }
@@ -677,7 +675,6 @@ impl Studio {
                     self.new_action_name.clear();
                     self.new_action_desc.clear();
                     self.new_action_icon = "E70F".to_string();
-                    self.new_action_shortcut.clear();
                     self.new_action_prompt.clear();
                 }
 
@@ -721,10 +718,6 @@ impl Studio {
                         ui.label(RichText::new("Icon:").font(FontId::proportional(12.0)).color(theme.text_secondary));
                         ui.add_sized([60.0, 24.0], egui::TextEdit::singleline(&mut self.new_action_icon).align(Align2::LEFT_CENTER).hint_text("e.g. E70F"))
                             .on_hover_text("A Segoe MDL2 icon codepoint, e.g. E70F");
-
-                        ui.add_space(10.0);
-                        ui.label(RichText::new("Shortcut:").font(FontId::proportional(12.0)).color(theme.text_secondary));
-                        ui.add_sized([40.0, 24.0], egui::TextEdit::singleline(&mut self.new_action_shortcut).align(Align2::LEFT_CENTER).hint_text("7"));
                     });
 
                     ui.add_space(6.0);
@@ -766,7 +759,8 @@ impl Studio {
                                     icon: mdl2_codepoint(self.new_action_icon.trim())
                                         .map(|cp| char::from_u32(cp).unwrap().to_string())
                                         .unwrap_or_else(|| self.new_action_icon.trim().to_string()),
-                                    shortcut: self.new_action_shortcut.trim().to_string(),
+                                    // Positional: assigned by list order.
+                                    shortcut: String::new(),
                                     prompt_instruction: self.new_action_prompt.trim().to_string(),
                                     default_instruction: self.new_action_prompt.trim().to_string(),
                                     is_builtin: false,
@@ -790,6 +784,7 @@ impl Studio {
 
         let mut reset_action_id: Option<String> = None;
         let mut delete_action_id: Option<String> = None;
+        let mut move_action: Option<(usize, usize)> = None;
         let mut save_needed = false;
 
         ScrollArea::vertical()
@@ -799,7 +794,8 @@ impl Studio {
                 ui.spacing_mut().item_spacing = Vec2::new(8.0, 10.0);
 
                 let actions = &mut store.settings.actions;
-                for action in actions.iter_mut() {
+                let actions_total = actions.len();
+                for (idx, action) in actions.iter_mut().enumerate() {
                     card_frame(theme, egui::Margin::same(14))
                         .show(ui, |ui| {
                             ui.set_width(ui.available_width());
@@ -835,6 +831,37 @@ impl Studio {
                                         if spectrum_button(ui, Some(icons::REFRESH), "Reset to Default", false, theme).clicked() {
                                             reset_action_id = Some(action.id.clone());
                                         }
+                                    }
+
+                                    // Reorder controls: the list order is the
+                                    // user's, and number keys follow position.
+                                    if ui.add_enabled(
+                                        idx > 0,
+                                        egui::Button::new(
+                                            RichText::new(icons::UP)
+                                                .font(FontId::proportional(12.0))
+                                                .color(theme.text_primary),
+                                        )
+                                        .fill(Color32::TRANSPARENT)
+                                        .stroke(Stroke::NONE),
+                                    ).on_disabled_hover_text("Already at the top")
+                                    .clicked()
+                                    {
+                                        move_action = Some((idx, idx - 1));
+                                    }
+                                    if ui.add_enabled(
+                                        idx + 1 < actions_total,
+                                        egui::Button::new(
+                                            RichText::new(icons::DOWN)
+                                                .font(FontId::proportional(12.0))
+                                                .color(theme.text_primary),
+                                        )
+                                        .fill(Color32::TRANSPARENT)
+                                        .stroke(Stroke::NONE),
+                                    ).on_disabled_hover_text("Already at the bottom")
+                                    .clicked()
+                                    {
+                                        move_action = Some((idx, idx + 1));
                                     }
 
                                     if !action.shortcut.is_empty() {
@@ -873,6 +900,9 @@ impl Studio {
         }
         if let Some(id) = delete_action_id {
             store.delete_custom_action(&id);
+        }
+        if let Some((from, to)) = move_action {
+            store.move_action(from, to);
         }
         if save_needed {
             store.save_settings();
