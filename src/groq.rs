@@ -346,7 +346,7 @@ pub fn complete_action(
                         }
                         if attempts.is_empty() {
                             break Err(format!(
-                                "Groq rate limit: your tokens-per-minute budget is exhausted - try again in a minute ({last_err})"
+                                "Groq rejected the request as too large - most often a tokens-per-minute budget: wait a minute, or shorten the selection ({last_err})"
                             ));
                         }
                     }

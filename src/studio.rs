@@ -116,6 +116,14 @@ impl Studio {
         false
     }
 
+    /// Persists a pending settings save immediately (tab switches, app
+    /// shutdown) - the debounce only exists to coalesce rapid edit bursts.
+    pub fn flush_pending_now(&mut self, store: &mut Store) {
+        if self.take_pending_save() {
+            store.save_settings();
+        }
+    }
+
     /// Takes a pending mark, if any; the caller then persists. Used when the
     /// Studio hides or the app exits, before the debounce window would have
     /// elapsed in `update`.
@@ -147,24 +155,26 @@ impl Studio {
 
         ui.set_width(ui.available_width());
 
-        // Keyboard navigation: Ctrl+1..4 jump between tabs
+        // Keyboard navigation: Ctrl+1..4 jump between tabs. Leaving an
+        // edit-heavy tab persists edits at once, not after the debounce.
         {
             let pressed = |key: Key| ctx_key(ui, key);
-            if pressed(Key::Num1) {
-                self.current_tab = StudioTab::History;
+            let mut picked: Option<StudioTab> = None;
+            if pressed(Key::Num1) && self.current_tab != StudioTab::History {
+                picked = Some(StudioTab::History);
             }
             if pressed(Key::Num2) && self.current_tab != StudioTab::Statistics {
-                if self.settings_save_at.is_some() {
-                    store.save_settings();
-                    self.settings_save_at = None;
-                }
-                self.current_tab = StudioTab::Statistics;
+                picked = Some(StudioTab::Statistics);
             }
-            if pressed(Key::Num3) {
-                self.current_tab = StudioTab::Actions;
+            if pressed(Key::Num3) && self.current_tab != StudioTab::Actions {
+                picked = Some(StudioTab::Actions);
             }
-            if pressed(Key::Num4) {
-                self.current_tab = StudioTab::Settings;
+            if pressed(Key::Num4) && self.current_tab != StudioTab::Settings {
+                picked = Some(StudioTab::Settings);
+            }
+            if let Some(tab) = picked {
+                self.flush_pending_now(store);
+                self.current_tab = tab;
             }
         }
 
@@ -236,10 +246,7 @@ impl Studio {
                 if resp.clicked() && self.current_tab != tab {
                     // Leaving an edit-heavy tab should persist edits at once,
                     // not after the debounce window.
-                    if self.settings_save_at.is_some() {
-                        store.save_settings();
-                        self.settings_save_at = None;
-                    }
+                    self.flush_pending_now(store);
                     self.current_tab = tab;
                 }
             }

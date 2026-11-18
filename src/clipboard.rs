@@ -186,7 +186,10 @@ pub fn capture_selection_with_window() -> Option<CapturedSelection> {
     }
     if !changed {
         send_copy_with_alt_release();
-        while start.elapsed() < Duration::from_millis(300) {
+        // A fresh window: slow responders (heavy Word documents, some
+        // terminals) need their own budget, not the tail of round one.
+        let second = std::time::Instant::now();
+        while second.elapsed() < Duration::from_millis(300) {
             let seq = unsafe { GetClipboardSequenceNumber() };
             if seq != old_seq {
                 changed = true;

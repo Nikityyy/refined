@@ -25,6 +25,15 @@ impl Default for ThemeMode {
 /// that saving it never stalls the UI thread.
 const HISTORY_LIMIT: usize = 500;
 
+/// Moves an unreadable store file aside so it can be recovered later.
+/// Timestamped: a second corruption must not overwrite the first backup.
+fn quarantine_corrupt(path: &std::path::Path) {
+    let stamp = chrono::Local::now().format("%Y%m%d-%H%M%S");
+    let mut name = path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+    name.push_str(&format!(".corrupt-{stamp}"));
+    let _ = std::fs::rename(path, path.with_file_name(name));
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppSettings {
     pub groq: GroqConfig,
@@ -67,10 +76,7 @@ impl Store {
                     eprintln!(
                         "[refined] settings.json unreadable, using defaults (backup will be created)"
                     );
-                    let _ = std::fs::rename(
-                        &settings_file,
-                        data_dir.join("settings.json.corrupt"),
-                    );
+                    quarantine_corrupt(&settings_file);
                     AppSettings::default()
                 }
             }
@@ -86,8 +92,7 @@ impl Store {
                     eprintln!(
                         "[refined] history.json unreadable, history starts empty (backup will be created)"
                     );
-                    let _ =
-                        std::fs::rename(&history_file, data_dir.join("history.json.corrupt"));
+                    quarantine_corrupt(&history_file);
                     Vec::new()
                 }
             }
