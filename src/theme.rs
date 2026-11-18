@@ -82,7 +82,9 @@ impl SpectrumTheme {
                 is_dark: true,
                 background: Color32::from_rgb(0x11, 0x11, 0x11),
                 surface: Color32::from_rgb(0x22, 0x22, 0x22),
-                surface_elevated: Color32::from_rgb(0x22, 0x22, 0x22),
+                // One real step above surface: the token must mean "elevated",
+                // not alias the window fill (that made the diff card vanish).
+                surface_elevated: Color32::from_rgb(0x2A, 0x2A, 0x2A),
                 surface_hover: Color32::from_rgb(0x32, 0x32, 0x32),
                 surface_active: Color32::from_rgb(0x39, 0x39, 0x39),
                 surface_subtle: Color32::from_rgb(0x39, 0x39, 0x39),
@@ -109,7 +111,9 @@ impl SpectrumTheme {
                 surface_elevated: Color32::from_rgb(0xFF, 0xFF, 0xFF),
                 surface_hover: Color32::from_rgb(0xE9, 0xE9, 0xE9),
                 surface_active: Color32::from_rgb(0xDA, 0xDA, 0xDA),
-                surface_subtle: Color32::from_rgb(0xE9, 0xE9, 0xE9),
+                // One step below hover: chips filled `subtle` must stay
+                // visible when they sit on a `hover`-filled selected row.
+                surface_subtle: Color32::from_rgb(0xDA, 0xDA, 0xDA),
                 border: Color32::from_rgb(0xDA, 0xDA, 0xDA),
                 text_primary: Color32::from_rgb(0x13, 0x13, 0x13),
                 text_body: Color32::from_rgb(0x29, 0x29, 0x29),
@@ -147,22 +151,22 @@ pub fn configure_egui_theme(ctx: &egui::Context, theme: &SpectrumTheme) {
     v.widgets.noninteractive.bg_fill = theme.surface;
     v.widgets.noninteractive.bg_stroke = Stroke::new(1.0, theme.border);
     v.widgets.noninteractive.fg_stroke = Stroke::new(1.0, theme.text_primary);
-    v.widgets.noninteractive.corner_radius = CornerRadius::same(6);
+    v.widgets.noninteractive.corner_radius = CornerRadius::same(4);
 
     v.widgets.inactive.bg_fill = theme.surface_elevated;
     v.widgets.inactive.bg_stroke = Stroke::new(1.0, theme.border);
     v.widgets.inactive.fg_stroke = Stroke::new(1.0, theme.text_primary);
-    v.widgets.inactive.corner_radius = CornerRadius::same(6);
+    v.widgets.inactive.corner_radius = CornerRadius::same(4);
 
     v.widgets.hovered.bg_fill = theme.surface_hover;
     v.widgets.hovered.bg_stroke = Stroke::new(1.0, theme.border);
     v.widgets.hovered.fg_stroke = Stroke::new(1.0, theme.text_primary);
-    v.widgets.hovered.corner_radius = CornerRadius::same(6);
+    v.widgets.hovered.corner_radius = CornerRadius::same(4);
 
     v.widgets.active.bg_fill = theme.surface_active;
     v.widgets.active.bg_stroke = Stroke::new(1.0, theme.border);
     v.widgets.active.fg_stroke = Stroke::new(1.0, theme.text_primary);
-    v.widgets.active.corner_radius = CornerRadius::same(6);
+    v.widgets.active.corner_radius = CornerRadius::same(4);
 
     v.widgets.open.bg_fill = theme.surface_hover;
 
@@ -346,7 +350,7 @@ pub fn spectrum_badge(ui: &mut Ui, text: &str, bg_color: Color32, text_color: Co
     ui.scope(|ui| {
         egui::Frame::new()
             .fill(bg_color)
-            .corner_radius(CornerRadius::same(10))
+            .corner_radius(CornerRadius::same(4))
             .inner_margin(egui::Margin::symmetric(8, 3))
             .show(ui, |ui| {
                 ui.label(
@@ -449,7 +453,24 @@ pub fn render_diff_view(ui: &mut Ui, chunks: &[DiffChunk], theme: &SpectrumTheme
     // used to place the manual strikethrough.
     let mut del_ranges: Vec<(usize, usize)> = Vec::new();
 
+    let mut prev_kind: Option<DiffKind> = None;
     for chunk in chunks {
+        // A red run butting straight into a green run reads as one smear;
+        // a thin neutral gap separates the before from the after.
+        if matches!((prev_kind, chunk.kind), (Some(DiffKind::Delete), DiffKind::Insert))
+            || matches!((prev_kind, chunk.kind), (Some(DiffKind::Insert), DiffKind::Delete))
+        {
+            job.append(
+                " ",
+                1.0,
+                TextFormat {
+                    font_id: font.clone(),
+                    color: theme.text_body,
+                    background: Color32::TRANSPARENT,
+                    ..Default::default()
+                },
+            );
+        }
         let start = job.text.chars().count();
         let (color, background) = match chunk.kind {
             DiffKind::Equal => (theme.text_body, Color32::TRANSPARENT),
@@ -470,6 +491,7 @@ pub fn render_diff_view(ui: &mut Ui, chunks: &[DiffChunk], theme: &SpectrumTheme
         if chunk.kind == DiffKind::Delete {
             del_ranges.push((start, end));
         }
+        prev_kind = Some(chunk.kind);
     }
 
     job.wrap.max_width = ui.available_width().max(64.0);
@@ -586,7 +608,7 @@ pub fn kbd_button(
     } else {
         theme.surface_elevated
     };
-    let corner = CornerRadius::same(6);
+    let corner = CornerRadius::same(4);
     ui.painter().rect_filled(rect, corner, fill);
     if !primary {
         ui.painter()

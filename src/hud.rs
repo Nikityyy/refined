@@ -5,7 +5,7 @@ use crate::diff::{compute_diff, DiffChunk, DiffStats};
 use crate::groq::{complete_action, GroqConfig};
 use crate::history::HistoryEntry;
 use crate::theme::{icons, kbd_button, render_diff_view, SpectrumTheme};
-use eframe::egui::{self, Color32, CornerRadius, FontId, Key, Pos2, RichText, Sense, Ui, Vec2};
+use eframe::egui::{self, Color32, CornerRadius, FontId, Key, Pos2, RichText, Sense, Stroke, Ui, Vec2};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::Arc;
@@ -405,6 +405,14 @@ impl Hud {
                 );
                 ui.painter()
                     .rect_filled(cap_rect, CornerRadius::same(4), theme.surface_subtle);
+                // The fill alone can alias the selected row's fill; the chip
+                // needs its own outline to stay a chip.
+                ui.painter().rect_stroke(
+                    cap_rect,
+                    CornerRadius::same(4),
+                    Stroke::new(1.0, theme.border),
+                    egui::StrokeKind::Outside,
+                );
                 ui.painter().galley(
                     Pos2::new(
                         cap_rect.center().x - cap_galley.size().x / 2.0,
@@ -458,11 +466,17 @@ impl Hud {
 
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if ui
-                    .add(egui::Button::new(
-                        RichText::new(icons::CLOSE)
-                            .font(FontId::proportional(13.0))
-                            .color(theme.text_secondary),
-                    ))
+                    .add(
+                        egui::Button::new(
+                            RichText::new(icons::CLOSE)
+                                .font(FontId::proportional(13.0))
+                                .color(theme.text_secondary),
+                        )
+                        // Quiet icon button: it must read as text, not as a
+                        // heavy bordered chip against the quiet palette.
+                        .fill(Color32::TRANSPARENT)
+                        .stroke(Stroke::NONE),
+                    )
                     .on_hover_text("Close (Esc)")
                     .clicked()
                 {
@@ -470,11 +484,15 @@ impl Hud {
                 }
 
                 if ui
-                    .add(egui::Button::new(
-                        RichText::new(icons::SETTINGS)
-                            .font(FontId::proportional(13.0))
-                            .color(theme.text_secondary),
-                    ))
+                    .add(
+                        egui::Button::new(
+                            RichText::new(icons::SETTINGS)
+                                .font(FontId::proportional(13.0))
+                                .color(theme.text_secondary),
+                        )
+                        .fill(Color32::TRANSPARENT)
+                        .stroke(Stroke::NONE),
+                    )
                     .on_hover_text("Open Studio")
                     .clicked()
                 {
@@ -488,25 +506,36 @@ impl Hud {
                     .map(|l| l.label.clone())
                     .unwrap_or_else(|| selected_language.clone());
 
-                egui::ComboBox::from_id_salt("hud_language_select")
-                    .selected_text(
-                        RichText::new(icons::WORLD)
-                            .font(FontId::proportional(13.0))
-                            .color(theme.text_secondary),
-                    )
-                    .width(36.0)
-                    .show_ui(ui, |ui| {
-                        for lang in standard_languages() {
-                            if ui
-                                .selectable_label(*selected_language == lang.code, &lang.label)
-                                .clicked()
-                            {
-                                *selected_language = lang.code.clone();
+                // Quiet combo: same hover-only treatment as the two icon
+                // buttons, scoped so TextEdits keep their own surfaces.
+                ui.scope(|ui| {
+                    ui.style_mut().visuals.widgets.inactive.bg_fill = Color32::TRANSPARENT;
+                    ui.style_mut().visuals.widgets.inactive.bg_stroke =
+                        Stroke::NONE;
+                    ui.style_mut().visuals.widgets.hovered.bg_fill = theme.surface_hover;
+                    ui.style_mut().visuals.widgets.hovered.bg_stroke = Stroke::NONE;
+                    ui.style_mut().visuals.widgets.active.bg_fill = theme.surface_active;
+                    ui.style_mut().visuals.widgets.active.bg_stroke = Stroke::NONE;
+                    egui::ComboBox::from_id_salt("hud_language_select")
+                        .selected_text(
+                            RichText::new(icons::WORLD)
+                                .font(FontId::proportional(13.0))
+                                .color(theme.text_secondary),
+                        )
+                        .width(36.0)
+                        .show_ui(ui, |ui| {
+                            for lang in standard_languages() {
+                                if ui
+                                    .selectable_label(*selected_language == lang.code, &lang.label)
+                                    .clicked()
+                                {
+                                    *selected_language = lang.code.clone();
+                                }
                             }
-                        }
-                    })
-                    .response
-                    .on_hover_text(format!("Language: {lang_label}"));
+                        })
+                        .response
+                        .on_hover_text(format!("Language: {lang_label}"));
+                });
             });
         });
 
@@ -528,7 +557,7 @@ impl Hud {
             ui.scope(|ui| {
                 egui::Frame::new()
                     .fill(theme.diff_del_bg)
-                    .corner_radius(CornerRadius::same(6))
+                    .corner_radius(CornerRadius::same(4))
                     .inner_margin(egui::Margin::same(8))
                     .show(ui, |ui| {
                         ui.label(RichText::new(format!("{} {}", icons::WARNING, err)).color(theme.diff_del_text).font(FontId::proportional(12.0)));
@@ -655,6 +684,12 @@ impl Hud {
                             .font(FontId::proportional(12.0))
                             .color(theme.text_secondary),
                     );
+                    // Esc works here but nothing said so; make it discoverable.
+                    ui.label(
+                        RichText::new("Press Esc to cancel")
+                            .font(FontId::proportional(11.0))
+                            .color(theme.text_tertiary),
+                    );
                     ui.add_space(8.0);
                 });
             }
@@ -695,7 +730,7 @@ impl Hud {
                         ui.label(
                             RichText::new(format!("{} · {}", duration_str, model_short))
                                 .font(FontId::proportional(12.0))
-                                .color(theme.text_tertiary),
+                                .color(theme.text_secondary),
                         );
                     });
                 });
@@ -718,10 +753,14 @@ impl Hud {
 
                 egui::ScrollArea::vertical()
                     .max_height(200.0)
-                    .auto_shrink([false, false])
+                    .auto_shrink([false, true])
                     .show(ui, |ui| {
+                        // The diff reads as an inset document well: one step
+                        // below the window fill, with a real border, not a
+                        // fill that aliases the window background.
                         egui::Frame::new()
-                            .fill(theme.surface_elevated)
+                            .fill(theme.background)
+                            .stroke(Stroke::new(1.0, theme.border))
                             .corner_radius(CornerRadius::same(8))
                             .inner_margin(egui::Margin::same(12))
                             .show(ui, |ui| {

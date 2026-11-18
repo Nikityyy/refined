@@ -154,21 +154,34 @@ impl Studio {
 
             for (tab, label, shortcut) in tabs {
                 let is_active = self.current_tab == tab;
-                // Spectrum navigation selection is a neutral fill; the accent
-                // stays reserved for primary actions.
-                let btn = if is_active {
-                    egui::Button::new(RichText::new(label).font(FontId::proportional(13.0)).color(theme.text_primary).strong())
-                        .fill(theme.surface_hover)
-                        .corner_radius(CornerRadius::same(6))
-                        .stroke(Stroke::NONE)
+                // Custom-drawn pill: egui's stock Button centers the font's
+                // em-box, and Segoe's ink sits 1px low in it, so the text
+                // read as pushed down inside the pill. We center the ink.
+                let galley = ui.painter().layout(
+                    label.to_string(),
+                    FontId::proportional(13.0),
+                    if is_active { theme.text_primary } else { theme.text_secondary },
+                    f32::INFINITY,
+                );
+                let size = Vec2::new(galley.size().x + 24.0, 24.0);
+                let (rect, resp) = ui.allocate_exact_size(size, Sense::click());
+                let hovered = resp.hovered();
+                let bg = if is_active || hovered {
+                    theme.surface_hover
                 } else {
-                    egui::Button::new(RichText::new(label).font(FontId::proportional(13.0)).color(theme.text_secondary))
-                        .fill(Color32::TRANSPARENT)
-                        .corner_radius(CornerRadius::same(6))
-                        .stroke(Stroke::NONE)
+                    Color32::TRANSPARENT
                 };
-
-                let resp = ui.add(btn).on_hover_text(shortcut);
+                ui.painter()
+                    .rect_filled(rect, CornerRadius::same(4), bg);
+                ui.painter().galley(
+                    Pos2::new(
+                        rect.left() + 12.0,
+                        rect.center().y - galley.size().y / 2.0 - 1.0,
+                    ),
+                    galley,
+                    Color32::WHITE,
+                );
+                let resp = resp.on_hover_text(shortcut);
                 if resp.clicked() {
                     self.current_tab = tab;
                 }
@@ -366,7 +379,7 @@ impl Studio {
                                 ui.label(RichText::new("Changes").font(FontId::proportional(12.0)).color(theme.accent).strong());
                                 egui::Frame::new()
                                     .fill(theme.surface_elevated)
-                                    .corner_radius(CornerRadius::same(6))
+                                    .corner_radius(CornerRadius::same(4))
                                     .inner_margin(egui::Margin::same(8))
                                     .show(ui, |ui| {
                                         render_diff_view(ui, &entry.diff_chunks, theme);
@@ -994,12 +1007,12 @@ impl Studio {
                         } else {
                             format!("{} Show", icons::EYE)
                         };
-                        if ui.add_sized([64.0, 28.0], egui::Button::new(RichText::new(toggle_text).font(FontId::proportional(12.0)).color(theme.text_primary)).fill(theme.surface_elevated).stroke(Stroke::new(1.0, theme.border)).corner_radius(CornerRadius::same(6))).clicked() {
+                        if ui.add_sized([64.0, 28.0], egui::Button::new(RichText::new(toggle_text).font(FontId::proportional(12.0)).color(theme.text_primary)).fill(theme.surface_elevated).stroke(Stroke::new(1.0, theme.border)).corner_radius(CornerRadius::same(4))).clicked() {
                             self.show_api_key = !self.show_api_key;
                         }
 
                         // Fixed 170px width for Fetch Models button
-                        if ui.add_sized([170.0, 28.0], egui::Button::new(RichText::new(format!("{}  Fetch Models from Groq", icons::DOWNLOAD)).font(FontId::proportional(12.0)).color(Color32::WHITE).strong()).fill(theme.accent).stroke(Stroke::NONE).corner_radius(CornerRadius::same(6))).clicked() {
+                        if ui.add_sized([170.0, 28.0], egui::Button::new(RichText::new(format!("{}  Fetch Models from Groq", icons::DOWNLOAD)).font(FontId::proportional(12.0)).color(Color32::WHITE).strong()).fill(theme.accent).stroke(Stroke::NONE).corner_radius(CornerRadius::same(4))).clicked() {
                             let key = store.settings.groq.api_key.clone();
                             self.fetch_models(&key);
                         }
