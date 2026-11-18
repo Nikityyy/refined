@@ -6,7 +6,7 @@ use crate::groq::{available_reasoning_efforts, fetch_chat_models, GroqConfig, Gr
 use crate::history::HistoryEntry;
 use crate::stats::calculate_stats;
 use crate::store::{Store, ThemeMode};
-use crate::theme::{card_frame, icons, render_diff_view, render_rf_logo, spectrum_badge, spectrum_button, spectrum_switch, SpectrumTheme};
+use crate::theme::{card_frame, icons, render_diff_view, render_rf_logo, spectrum_badge, spectrum_button, spectrum_slider, spectrum_switch, SpectrumTheme};
 use eframe::egui::{
     self, Align, Align2, Color32, CornerRadius, FontId, Key, Layout, Pos2, Rect, RichText,
     ScrollArea, Sense, Stroke, Ui, Vec2,
@@ -518,7 +518,10 @@ impl Studio {
                         }
 
                         // Bars grow from a shared baseline; the count rides
-                        // above the bar, the day label below it.
+                        // above the bar, the day label below it. One single
+                        // hit-tested hover for the whole plot - per-bar
+                        // interactive rects made the hover state flicker
+                        // between bars of equal height.
                         let max_count = stats
                             .daily_counts
                             .iter()
@@ -528,13 +531,32 @@ impl Studio {
                             .max(1) as f32;
                         let plot_h = 120.0;
                         let label_band = 22.0;
-                        let (plot_rect, _) = ui.allocate_exact_size(
+                        let (plot_rect, plot_resp) = ui.allocate_exact_size(
                             Vec2::new(ui.available_width(), plot_h + label_band),
                             Sense::hover(),
                         );
                         let plot_w = plot_rect.width();
                         let slot = plot_w / 7.0;
                         let baseline = plot_rect.bottom() - label_band;
+
+                        let hovered_day = plot_resp
+                            .hovered()
+                            .then(|| {
+                                ui.input(|i| i.pointer.hover_pos())
+                                    .map(|p| {
+                                        ((p.y <= baseline) as u16,
+                                         (p.x - plot_rect.left()) / slot)
+                                    })
+                            })
+                            .flatten()
+                            .and_then(|(in_band, slot_idx)| {
+                                if in_band == 1 {
+                                    let idx = slot_idx.floor() as usize;
+                                    stats.daily_counts.get(idx)
+                                } else {
+                                    None
+                                }
+                            });
 
                         for (i, (day, count)) in stats.daily_counts.iter().enumerate() {
                             let ratio = (*count as f32 / max_count).clamp(0.04, 1.0);
@@ -545,8 +567,16 @@ impl Studio {
                                 Pos2::new(cx - bar_w / 2.0, baseline - bar_h),
                                 Pos2::new(cx + bar_w / 2.0, baseline),
                             );
+                            let hovered = hovered_day
+                                .as_ref()
+                                .map(|(d, _)| d == day)
+                                .unwrap_or(false);
                             let bar_color = if *count > 0 {
-                                theme.accent
+                                if hovered {
+                                    theme.accent_hover
+                                } else {
+                                    theme.accent
+                                }
                             } else {
                                 theme.surface_active
                             };
@@ -579,8 +609,10 @@ impl Studio {
                                 day_galley,
                                 Color32::WHITE,
                             );
+                        }
 
-                            ui.interact(bar_rect, ui.scope_id().with(("bar", day)), Sense::hover())
+                        if let Some((day, count)) = hovered_day {
+                            plot_resp
                                 .on_hover_text(format!("{day}: {count} refinements"));
                         }
                     });
@@ -1017,31 +1049,33 @@ impl Studio {
                     ui.add_space(12.0);
 
                     // Sliders on a shared label column so they align at the
-                    // same x; both show their live value.
+                    // same x; the value is shown next to each slider.
                     egui::Grid::new("groq_numeric_settings")
-                        .num_columns(2)
+                        .num_columns(3)
                         .spacing([12.0, 8.0])
                         .show(ui, |ui| {
                             ui.label(RichText::new("Temperature:").font(FontId::proportional(12.0)).color(theme.text_primary));
-                            let slider = ui.add(
-                                egui::Slider::new(&mut store.settings.groq.temperature, 0.0..=2.0)
-                                    .step_by(0.05)
-                                    .show_value(true),
-                            );
+                            let slider = spectrum_slider(ui, &mut store.settings.groq.temperature, 0.0..=2.0, 0.05, theme);
                             if slider.changed() {
                                 store.save_settings();
                             }
+                            ui.label(
+                                RichText::new(format!("{:.2}", store.settings.groq.temperature))
+                                    .font(FontId::monospace(12.0))
+                                    .color(theme.text_secondary),
+                            );
                             ui.end_row();
 
                             ui.label(RichText::new("Top-P:").font(FontId::proportional(12.0)).color(theme.text_primary));
-                            let slider = ui.add(
-                                egui::Slider::new(&mut store.settings.groq.top_p, 0.0..=1.0)
-                                    .step_by(0.05)
-                                    .show_value(true),
-                            );
+                            let slider = spectrum_slider(ui, &mut store.settings.groq.top_p, 0.0..=1.0, 0.05, theme);
                             if slider.changed() {
                                 store.save_settings();
                             }
+                            ui.label(
+                                RichText::new(format!("{:.2}", store.settings.groq.top_p))
+                                    .font(FontId::monospace(12.0))
+                                    .color(theme.text_secondary),
+                            );
                             ui.end_row();
                         });
 

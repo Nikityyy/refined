@@ -341,6 +341,69 @@ pub fn card_frame(theme: &SpectrumTheme, inner_margin: egui::Margin) -> egui::Fr
         .inner_margin(inner_margin)
 }
 
+/// Spectrum-styled continuous slider: a visible 4px track (egui's default
+/// rail paints with the same color as the card surface and disappears),
+/// an accent trailing fill, and a solid knob.
+pub fn spectrum_slider(
+    ui: &mut Ui,
+    value: &mut f32,
+    range: std::ops::RangeInclusive<f32>,
+    step: f32,
+    theme: &SpectrumTheme,
+) -> Response {
+    let width = ui.available_width().min(280.0);
+    let (rect, mut response) =
+        ui.allocate_exact_size(Vec2::new(width, 24.0), Sense::drag());
+
+    if response.dragged() {
+        if let Some(p) = response.interact_pointer_pos() {
+            let t = ((p.x - rect.left()) / rect.width()).clamp(0.0, 1.0);
+            let raw = egui::lerp(range.clone(), t);
+            let snapped = (raw / step).round() * step;
+            let clamped = snapped.clamp(*range.start(), *range.end());
+            if (clamped - *value).abs() > f32::EPSILON {
+                *value = clamped;
+                response.mark_changed();
+            }
+        }
+    }
+
+    let (start, end) = (*range.start(), *range.end());
+    let t = ((*value - start) / (end - start).max(f32::EPSILON)).clamp(0.0, 1.0);
+    let cy = rect.center().y;
+
+    // Track
+    ui.painter().rect_filled(
+        Rect::from_min_max(
+            Pos2::new(rect.left(), cy - 2.0),
+            Pos2::new(rect.right(), cy + 2.0),
+        ),
+        CornerRadius::same(2),
+        theme.surface_subtle,
+    );
+    // Trailing fill
+    let fill_x = rect.left() + t * rect.width();
+    ui.painter().rect_filled(
+        Rect::from_min_max(
+            Pos2::new(rect.left(), cy - 2.0),
+            Pos2::new(fill_x, cy + 2.0),
+        ),
+        CornerRadius::same(2),
+        theme.accent,
+    );
+    // Knob
+    let knob_r = 8.0;
+    let knob_x = fill_x.clamp(rect.left() + knob_r, rect.right() - knob_r);
+    ui.painter().circle(
+        Pos2::new(knob_x, cy),
+        knob_r,
+        theme.text_primary,
+        Stroke::new(2.0, theme.surface),
+    );
+
+    response
+}
+
 /// Renders the refined-vs-original diff as a single wrapped text flow:
 /// one layout job so all sections wrap at the true panel width, with
 /// opaque Spectrum red/green subtle backgrounds behind the changed runs.
