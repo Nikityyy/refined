@@ -26,6 +26,53 @@ use windows::Win32::System::Threading::{CreateEventW, CreateMutexW, SetEvent};
 pub const INSTANCE_MUTEX: PCWSTR = w!("Local\\Refined");
 pub const RESTORE_EVENT: PCWSTR = w!("Local\\Refined.Restore");
 
+#[derive(serde::Deserialize)]
+struct HistorySeed {
+    action_id: String,
+    action_name: String,
+    original_text: String,
+    refined_text: String,
+    age_hours: i64,
+    duration_ms: u128,
+}
+
+/// Writes demo history entries computed through the real diff engine.
+fn seed_history(path: &str) {
+    let content = match std::fs::read_to_string(path) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("could not read seed file '{path}': {e}");
+            std::process::exit(2);
+        }
+    };
+    let seeds: Vec<HistorySeed> = match serde_json::from_str(&content) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("could not parse seed file '{path}': {e}");
+            std::process::exit(2);
+        }
+    };
+
+    let mut store = store::Store::open();
+    for seed in seeds {
+        let (chunks, stats) = diff::compute_diff(&seed.original_text, &seed.refined_text);
+        let mut entry = history::HistoryEntry::new(
+            seed.action_id.clone(),
+            seed.action_name.clone(),
+            seed.original_text,
+            seed.refined_text,
+            chunks,
+            stats,
+            "openai/gpt-oss-120b".to_string(),
+            seed.duration_ms,
+            "auto".to_string(),
+        );
+        entry.timestamp = chrono::Local::now() - chrono::Duration::hours(seed.age_hours);
+        store.add_history(entry);
+    }
+    println!("seeded {} history entries", store.history.len());
+}
+
 fn main() -> eframe::Result {
     // Single instance mutex and restore event
     let restore_event = unsafe { CreateEventW(None, false, false, RESTORE_EVENT) }.expect("restore event");
@@ -101,6 +148,16 @@ because AI models are unable to distinguishes between facts and convincing-sound
                 std::process::exit(2);
             }
         }
+        return Ok(());
+    }
+
+    // Demo seeding: `refined --seed-history=<file>` loads a JSON array of
+    // {action_id, action_name, original_text, refined_text, age_hours,
+    // duration_ms} records and writes real history entries whose diff chunks
+    // and stats come from the production diff engine, so captures show only
+    // data the app could have produced itself.
+    if let Some(seed_file) = std::env::args().find_map(|a| a.strip_prefix("--seed-history=").map(str::to_string)) {
+        seed_history(&seed_file);
         return Ok(());
     }
 
