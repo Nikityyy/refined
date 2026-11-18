@@ -616,7 +616,7 @@ impl Studio {
                     // into one row. The body must be vertical.
                     ui.vertical(|ui| {
                         ui.set_width(left_w);
-                        ui.set_min_height(250.0);
+                        ui.set_min_height(200.0);
 
                         ui.label(
                             RichText::new("Refinements per day")
@@ -716,7 +716,7 @@ impl Studio {
                 .show(ui, |ui| {
                     ui.vertical(|ui| {
                         ui.set_width(right_w);
-                        ui.set_min_height(250.0);
+                        ui.set_min_height(200.0);
 
                         ui.label(
                             RichText::new("Action distribution")
@@ -1475,13 +1475,16 @@ fn render_metric_card(
     card_width: f32,
     theme: &SpectrumTheme,
 ) {
-    card_frame(theme, egui::Margin::symmetric(16, 12))
+    // Compact height: at 96px tall the stack filled only ~2/3 with the
+    // leftover pooled at the bottom, so the cards read as oversized blocks.
+    card_frame(theme, egui::Margin::symmetric(16, 10))
         .show(ui, |ui| {
             // Vertical body: this Frame can be shown inside a horizontal
             // parent, and egui frames inherit the parent layout.
             ui.vertical(|ui| {
                 ui.set_width(card_width);
-                ui.set_min_height(72.0);
+                ui.set_min_height(58.0);
+                ui.spacing_mut().item_spacing.y = 4.0;
 
                 ui.label(
                     RichText::new(title)
@@ -1489,7 +1492,6 @@ fn render_metric_card(
                         .color(theme.text_secondary)
                         .strong(),
                 );
-                ui.add_space(2.0);
                 ui.label(
                     RichText::new(value)
                         .font(FontId::proportional(22.0))
