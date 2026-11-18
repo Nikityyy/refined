@@ -16,6 +16,7 @@ use eframe::egui::{
 /// constant here must have a call site; the compiler enforces it.
 pub mod icons {
     pub const TRASH: &str = "\u{E74D}";
+    pub const SEARCH: &str = "\u{E721}";
     pub const SETTINGS: &str = "\u{E713}";
     pub const WORLD: &str = "\u{E909}";
     pub const CLOSE: &str = "\u{E711}";
@@ -106,7 +107,10 @@ impl SpectrumTheme {
                 is_dark: false,
                 background: Color32::from_rgb(0xF8, 0xF8, 0xF8),
                 surface: Color32::from_rgb(0xFF, 0xFF, 0xFF),
-                surface_elevated: Color32::from_rgb(0xFF, 0xFF, 0xFF),
+                // One real step above surface, mirroring the dark palette:
+                // a white `elevated` made buttons and inset containers
+                // invisible on white cards.
+                surface_elevated: Color32::from_rgb(0xF4, 0xF4, 0xF4),
                 surface_hover: Color32::from_rgb(0xE9, 0xE9, 0xE9),
                 surface_active: Color32::from_rgb(0xDA, 0xDA, 0xDA),
                 // One step below hover: chips filled `subtle` must stay

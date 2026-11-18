@@ -183,7 +183,15 @@ impl Studio {
                     .strong(),
             );
 
-            spectrum_badge(ui, "v0.2.0", theme.surface_elevated, theme.text_secondary);
+            // The header sits on `background`, so the badge needs a fill with
+            // real contrast there: `elevated` is white in light mode and the
+            // pill vanished on the near-white header.
+            let version_bg = if theme.is_dark {
+                theme.surface_elevated
+            } else {
+                theme.surface_subtle
+            };
+            spectrum_badge(ui, "v0.2.0", version_bg, theme.text_secondary);
 
             ui.add_space(20.0);
 
@@ -292,12 +300,24 @@ impl Studio {
                         }
                     });
 
-                // Search box with fixed size
+                // Search box with fixed size, a clear button, and a leading
+                // search icon so the field is findable at a glance.
+                if !self.history_search.is_empty() {
+                    if ui.add_sized([24.0, 26.0], egui::Button::new(RichText::new(icons::CLEAR).font(FontId::proportional(11.0)).color(theme.text_secondary)).fill(Color32::TRANSPARENT).stroke(Stroke::NONE)).on_hover_text("Clear search").clicked() {
+                        self.history_search.clear();
+                    }
+                }
                 ui.add_sized(
                     [220.0, 26.0],
                     egui::TextEdit::singleline(&mut self.history_search)
                         .align(Align2::LEFT_CENTER)
-                        .hint_text("Search refinements..."),                );
+                        .hint_text("Search refinements..."),
+                );
+                ui.label(
+                    RichText::new(icons::SEARCH)
+                        .font(FontId::proportional(12.0))
+                        .color(theme.text_secondary),
+                );
             });
         });
 
@@ -378,8 +398,16 @@ impl Studio {
                                     theme.accent_badge_bg,
                                     theme.accent_badge_text,
                                 );
+                                // Include the year only once entries leave it:
+                                // "%b %d" is ambiguous after a few months.
+                                let now_year = chrono::Local::now().format("%Y").to_string();
+                                let ts_fmt = if entry.timestamp.format("%Y").to_string() == now_year {
+                                    "%b %d, %H:%M"
+                                } else {
+                                    "%b %d, %Y, %H:%M"
+                                };
                                 ui.label(
-                                    RichText::new(entry.timestamp.format("%b %d, %H:%M").to_string())
+                                    RichText::new(entry.timestamp.format(ts_fmt).to_string())
                                         .font(FontId::proportional(12.0))
                                         .color(theme.text_tertiary),
                                 );
@@ -400,7 +428,7 @@ impl Studio {
                                 );
 
                                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                                    if ui.add_sized([26.0, 22.0], egui::Button::new(RichText::new(icons::TRASH).color(theme.diff_del_text)).fill(Color32::TRANSPARENT).stroke(Stroke::NONE)).clicked() {
+                                    if ui.add_sized([26.0, 22.0], egui::Button::new(RichText::new(icons::TRASH).color(theme.diff_del_text)).fill(Color32::TRANSPARENT).stroke(Stroke::NONE)).on_hover_text("Delete this entry").clicked() {
                                         delete_id = Some(entry.id.clone());
                                     }
 
@@ -435,6 +463,7 @@ impl Studio {
                                 ui.label(RichText::new("Changes").font(FontId::proportional(12.0)).color(theme.accent).strong());
                                 egui::Frame::new()
                                     .fill(theme.surface_elevated)
+                                    .stroke(Stroke::new(1.0, theme.border))
                                     .corner_radius(CornerRadius::same(4))
                                     .inner_margin(egui::Margin::same(8))
                                     .show(ui, |ui| {
@@ -732,7 +761,16 @@ impl Studio {
                         }
                         rows.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
 
-                        for (action_name, count) in rows.iter().take(8) {
+                        // Beyond 7 rows the tail rolls into "Other" so the
+                        // percentages still sum to 100 instead of silently
+                        // dropping actions.
+                        if rows.len() > 8 {
+                            let other: usize = rows.iter().skip(7).map(|(_, v)| v).sum();
+                            rows.truncate(7);
+                            rows.push(("Other".to_string(), other));
+                        }
+
+                        for (action_name, count) in rows.iter() {
                             let pct = (*count as f32 / total) * 100.0;
                             ui.horizontal(|ui| {
                                 ui.label(RichText::new(action_name).font(FontId::proportional(12.0)).color(theme.text_primary));
@@ -741,9 +779,13 @@ impl Studio {
                                 });
                             });
 
+                            // At 0% ProgressBar still paints a minimum-width
+                            // fill; filling with the track color keeps an
+                            // empty row truly empty.
+                            let track = ui.style().visuals.extreme_bg_color;
                             ui.add(
                                 egui::ProgressBar::new(pct / 100.0)
-                                    .fill(theme.accent)
+                                    .fill(if pct > 0.0 { theme.accent } else { track })
                                     .corner_radius(CornerRadius::same(3))
                                     .animate(false),
                             );
@@ -796,7 +838,7 @@ impl Studio {
                 .fill(theme.surface_elevated)
                 .stroke(Stroke::new(1.0, theme.accent))
                 .corner_radius(CornerRadius::same(8))
-                .inner_margin(egui::Margin::same(14))
+                .inner_margin(egui::Margin::same(16))
                 .show(ui, |ui| {
                     ui.label(
                         RichText::new("Create New Action")
@@ -892,7 +934,7 @@ impl Studio {
                 let actions = &mut store.settings.actions;
                 let actions_total = actions.len();
                 for (idx, action) in actions.iter_mut().enumerate() {
-                    card_frame(theme, egui::Margin::same(14))
+                    card_frame(theme, egui::Margin::same(12))
                         .show(ui, |ui| {
                             ui.set_width(ui.available_width());
 
@@ -918,7 +960,7 @@ impl Studio {
 
                                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                                     if !action.is_builtin {
-                                        if ui.add_sized([64.0, 24.0], egui::Button::new(RichText::new(format!("{} Delete", icons::TRASH)).color(theme.diff_del_text)).fill(Color32::TRANSPARENT).stroke(Stroke::NONE)).clicked() {
+                                        if ui.add_sized([64.0, 24.0], egui::Button::new(RichText::new(format!("{} Delete", icons::TRASH)).color(theme.diff_del_text)).fill(Color32::TRANSPARENT).stroke(Stroke::NONE)).on_hover_text("Delete this custom action").clicked() {
                                             delete_action_id = Some(action.id.clone());
                                         }
                                     }
@@ -940,7 +982,8 @@ impl Studio {
                                         )
                                         .fill(Color32::TRANSPARENT)
                                         .stroke(Stroke::NONE),
-                                    ).on_disabled_hover_text("Already at the top")
+                                    ).on_hover_text("Move up")
+                                    .on_disabled_hover_text("Already at the top")
                                     .clicked()
                                     {
                                         move_action = Some((idx, idx - 1));
@@ -954,7 +997,8 @@ impl Studio {
                                         )
                                         .fill(Color32::TRANSPARENT)
                                         .stroke(Stroke::NONE),
-                                    ).on_disabled_hover_text("Already at the bottom")
+                                    ).on_hover_text("Move down")
+                                    .on_disabled_hover_text("Already at the bottom")
                                     .clicked()
                                     {
                                         move_action = Some((idx, idx + 1));
@@ -1312,17 +1356,21 @@ impl Studio {
                             }
 
                             if active {
-                                // Filled segment: white in dark mode, white in
-                                // light mode - macOS-style knob.
+                                // Filled segment: white with a hairline
+                                // border - borderless white vanished on the
+                                // light mode track.
                                 let inset = 2.0;
                                 let fill_rect = Rect::from_min_max(
                                     Pos2::new(seg_rect.left() + inset, seg_rect.top() + inset),
                                     Pos2::new(seg_rect.right() - inset, seg_rect.bottom() - inset),
                                 );
-                                ui.painter().rect_filled(
+                                let fill_radius = CornerRadius::same(((seg_h - inset * 2.0) / 2.0) as u8);
+                                ui.painter().rect_filled(fill_rect, fill_radius, Color32::WHITE);
+                                ui.painter().rect_stroke(
                                     fill_rect,
-                                    CornerRadius::same(((seg_h - inset * 2.0) / 2.0) as u8),
-                                    Color32::WHITE,
+                                    fill_radius,
+                                    Stroke::new(1.0, theme.border),
+                                    egui::StrokeKind::Inside,
                                 );
                             }
 
@@ -1404,14 +1452,18 @@ fn fmt_thousands(n: usize) -> String {
     out
 }
 
-/// Truncates to at most `max_chars` characters, appending an ellipsis when cut,
-/// and never splitting a multi-byte character.
+/// Truncates to at most `max_chars` characters, cutting back to the last
+/// whitespace so the ellipsis never glues onto a half-word, and never
+/// splitting a multi-byte character.
 fn truncate_chars(text: &str, max_chars: usize) -> String {
     if text.chars().count() <= max_chars {
         return text.to_string();
     }
     let cut: String = text.chars().take(max_chars).collect();
-    format!("{}...", cut.trim_end())
+    match cut.rfind(char::is_whitespace) {
+        Some(i) => format!("{}...", &cut[..i]),
+        None => format!("{}...", cut.trim_end()),
+    }
 }
 
 fn render_metric_card(
@@ -1422,7 +1474,7 @@ fn render_metric_card(
     card_width: f32,
     theme: &SpectrumTheme,
 ) {
-    card_frame(theme, egui::Margin::symmetric(14, 12))
+    card_frame(theme, egui::Margin::symmetric(16, 12))
         .show(ui, |ui| {
             // Vertical body: this Frame can be shown inside a horizontal
             // parent, and egui frames inherit the parent layout.
