@@ -546,11 +546,12 @@ impl Studio {
         // dashboards reserve color for actions, not digits.
         let available_w = ui.available_width();
         let gap = 12.0;
-        // inner_margin(14) painted on both sides PLUS the 1px frame stroke
-        // on each side: 30 px per card. Subtracting only 28 made this row
-        // overshoot the dashboard cards below by ~8px, whose own row came
-        // up 4px short - the right edges visibly failed to stack.
-        let side_margin = 30.0;
+        // inner_margin(16) painted on both sides PLUS the 1px frame stroke
+        // on each side: 34 px per card. This must track the metric card's
+        // own frame padding - when the two drift apart the metric row
+        // overflows to the window edge while the dashboard row below sits
+        // inside it, and the right edges visibly fail to stack.
+        let side_margin = 34.0;
         let per_row = if available_w >= 182.0 * 4.0 + gap * 3.0 + side_margin * 4.0 {
             4
         } else {
