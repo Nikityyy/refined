@@ -158,17 +158,20 @@ pub fn compute_diff(original: &str, refined: &str) -> (Vec<DiffChunk>, DiffStats
                 });
             }
         } else {
-            // 2b. Standard LCS over the changed middle only.
+            // 2b. Standard LCS over the changed middle only. A flat row-major
+            //     table keeps the allocation at exactly the guarded cell
+            //     count (a Vec<Vec<_>> would add unbounded per-row headers).
             let n = mid_orig.len();
             let m = mid_ref.len();
-
-            let mut dp = vec![vec![0u32; m + 1]; n + 1];
+            let stride = m + 1;
+            let mut dp = vec![0u32; (n + 1) * stride];
             for i in 0..n {
                 for j in 0..m {
+                    let here = (i + 1) * stride + (j + 1);
                     if mid_orig[i] == mid_ref[j] {
-                        dp[i + 1][j + 1] = dp[i][j] + 1;
+                        dp[here] = dp[i * stride + j] + 1;
                     } else {
-                        dp[i + 1][j + 1] = dp[i + 1][j].max(dp[i][j + 1]);
+                        dp[here] = dp[(i + 1) * stride + j].max(dp[i * stride + j + 1]);
                     }
                 }
             }
@@ -184,7 +187,7 @@ pub fn compute_diff(original: &str, refined: &str) -> (Vec<DiffChunk>, DiffStats
                     });
                     i -= 1;
                     j -= 1;
-                } else if j > 0 && (i == 0 || dp[i][j - 1] >= dp[i - 1][j]) {
+                } else if j > 0 && (i == 0 || dp[i * stride + j - 1] >= dp[(i - 1) * stride + j]) {
                     middle.push(DiffChunk {
                         kind: DiffKind::Insert,
                         text: mid_ref[j - 1].to_string(),

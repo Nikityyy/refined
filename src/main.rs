@@ -54,6 +54,10 @@ fn seed_history(path: &str) {
     };
 
     let mut store = store::Store::open();
+    // add_history inserts at index 0 (newest first), so inserting
+    // oldest-first keeps the shipping evidence in true newest-first order.
+    let mut seeds = seeds;
+    seeds.sort_by(|a, b| b.age_hours.cmp(&a.age_hours));
     for seed in seeds {
         let (chunks, stats) = diff::compute_diff(&seed.original_text, &seed.refined_text);
         let mut entry = history::HistoryEntry::new(

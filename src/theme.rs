@@ -24,23 +24,6 @@ pub mod icons {
     pub const REFRESH: &str = "\u{E72C}";
 }
 
-#[allow(dead_code)]
-pub const SPACE_2: f32 = 2.0;
-#[allow(dead_code)]
-pub const SPACE_4: f32 = 4.0;
-#[allow(dead_code)]
-pub const SPACE_8: f32 = 8.0;
-#[allow(dead_code)]
-pub const SPACE_12: f32 = 12.0;
-#[allow(dead_code)]
-pub const SPACE_16: f32 = 16.0;
-#[allow(dead_code)]
-pub const SPACE_20: f32 = 20.0;
-#[allow(dead_code)]
-pub const SPACE_24: f32 = 24.0;
-#[allow(dead_code)]
-pub const SPACE_32: f32 = 32.0;
-
 #[derive(Clone, Copy, Debug)]
 pub struct SpectrumTheme {
     pub is_dark: bool,

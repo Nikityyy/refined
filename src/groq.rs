@@ -121,15 +121,18 @@ fn http_agent() -> &'static ureq::Agent {
 /// - Strips only the newlines the model wrapped its answer in, then restores
 ///   the newline run the ORIGINAL selection ended with; dropping it would
 ///   merge two paragraphs on paste (the diff would show a phantom Delete).
-/// - Maps U+2011 (non-breaking hyphen) and removes zero-width characters,
-///   which otherwise land verbatim in the document and silently break
-///   search, spellcheck, and hyphenation.
+/// - Maps U+2011 (non-breaking hyphen) and removes the zero-width character
+///   class (ZWSP, ZWNJ, ZWJ, BOM, word joiner), which otherwise lands
+///   verbatim in the document and silently breaks search, spellcheck, and
+///   hyphenation.
 pub fn clean_generated_text(raw: &str, original: &str) -> String {
     let mut out: String = raw
         .trim_matches(|c| c == '\r' || c == '\n')
         .chars()
         .map(|c| if c == '\u{2011}' { '-' } else { c })
-        .filter(|c| *c != '\u{200B}' && *c != '\u{FEFF}')
+        .filter(|c| {
+            !matches!(c, '\u{200B}' | '\u{200C}' | '\u{200D}' | '\u{2060}' | '\u{FEFF}')
+        })
         .collect();
 
     let orig_tail: String = original

@@ -39,8 +39,9 @@ pub fn calculate_stats(history: &[HistoryEntry]) -> AggregatedStats {
         total_duration += entry.duration_ms;
         // Only words the user would have had to re-type by hand count as
         // saved editing time; crediting the whole text volume invents time.
+        // Insert-side only: a replacement pair counts once, not twice.
         for chunk in &entry.diff_chunks {
-            if chunk.kind != crate::diff::DiffKind::Equal {
+            if chunk.kind == crate::diff::DiffKind::Insert {
                 changed_words += chunk.text.split_whitespace().count();
             }
         }

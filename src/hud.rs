@@ -59,7 +59,7 @@ pub struct Hud {
     /// Demo mode: do not auto-dismiss on focus loss (so the UI can be inspected).
     pub demo_sticky: bool,
     /// Generation token: bumped whenever an old run must be invalidated
-    /// (HUD closed, re-opened, or a new action triggered). A worker whose
+    /// (HUD re-opened, closed, or a new action triggered). A worker whose
     /// generation is stale must never paste into the user's window.
     generation: Arc<AtomicU64>,
 }
@@ -128,6 +128,8 @@ impl Hud {
     }
 
     pub fn open(&mut self, text: String, x: i32, y: i32, target_hwnd: isize) {
+        // Invalidate any in-flight run from a previous HUD session.
+        self.generation.fetch_add(1, Ordering::Relaxed);
         self.original_text = text;
         self.target_hwnd = target_hwnd;
         self.is_visible = true;
