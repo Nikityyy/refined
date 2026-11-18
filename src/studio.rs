@@ -2,7 +2,7 @@
 
 use crate::actions::ActionItem;
 use crate::autostart;
-use crate::groq::{available_reasoning_efforts, fetch_chat_models, GroqConfig, GroqModel};
+use crate::groq::{available_reasoning_efforts, fetch_chat_models, GroqConfig, GroqModel, DEFAULT_MODEL, FALLBACK_MODELS};
 use crate::history::HistoryEntry;
 use crate::stats::calculate_stats;
 use crate::store::{Store, ThemeMode};
@@ -1168,7 +1168,7 @@ impl Studio {
                             .show_ui(ui, |ui| {
                                 if !self.fetched_models.is_empty() {
                                     for m in &self.fetched_models {
-                                        let label = if m.id == "openai/gpt-oss-120b" {
+                                        let label = if m.id == DEFAULT_MODEL {
                                             format!("{} (Recommended)", m.id)
                                         } else {
                                             m.id.clone()
@@ -1179,15 +1179,17 @@ impl Studio {
                                     }
                                 } else {
                                     // Shown only until the user fetches the
-                                    // live list; does not include models that
-                                    // Groq has retired.
-                                    let defaults = [
-                                        "openai/gpt-oss-120b",
-                                        "openai/gpt-oss-20b",
-                                        "qwen/qwen3.8-27b",
-                                    ];
-                                    for m in defaults {
-                                        if ui.selectable_value(&mut store.settings.groq.model, m.to_string(), m).clicked() {
+                                    // live list; mirrors Groq's current chat
+                                    // lineup and deliberately excludes
+                                    // non-chat models (Whisper, Orpheus,
+                                    // prompt guards, safeguard classifier).
+                                    for m in FALLBACK_MODELS {
+                                        let label = if *m == DEFAULT_MODEL {
+                                            format!("{m} (Recommended)")
+                                        } else {
+                                            (*m).to_string()
+                                        };
+                                        if ui.selectable_value(&mut store.settings.groq.model, m.to_string(), label).clicked() {
                                             model_picked = true;
                                         }
                                     }

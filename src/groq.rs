@@ -19,7 +19,10 @@ impl Default for GroqConfig {
     fn default() -> Self {
         Self {
             api_key: String::new(),
-            model: "openai/gpt-oss-120b".to_string(),
+            // Benchmark winner: matches gpt-oss-120b's polish/simplify/
+            // expand/structure quality while being ~30-70% faster on the
+            // short-form actions that dominate real use.
+            model: DEFAULT_MODEL.to_string(),
             reasoning_effort: "high".to_string(),
             temperature: 1.0,
             top_p: 1.0,
@@ -93,6 +96,20 @@ struct ChatCompletionResponse {
 /// so without this a hung connection would freeze the HUD in Processing
 /// forever (and the 400-fallback ladder would multiply the wait).
 const HTTP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(45);
+
+/// The benchmarked default model: matches gpt-oss-120b quality on every
+/// action while leading on speed for the short-form ones.
+pub const DEFAULT_MODEL: &str = "openai/gpt-oss-20b";
+
+/// Groq's current chat-capable lineup, shown before the user fetches the
+/// live list. Non-chat models (Whisper, Orpheus, prompt guards, safeguard)
+/// are deliberately absent.
+pub const FALLBACK_MODELS: &[&str] = &[
+    "openai/gpt-oss-20b",
+    "openai/gpt-oss-120b",
+    "qwen/qwen3.8-27b",
+    "allam-2-7b",
+];
 
 /// Shared HTTP agent with the overall call timeout configured, so a hung
 /// TLS/HTTP connection surfaces as an error instead of a frozen HUD.
@@ -192,11 +209,20 @@ pub fn fetch_chat_models(api_key: &str) -> Result<Vec<GroqModel>, String> {
         })
         .collect();
 
-    // Sort models so that preferred ones (like gpt-oss-120b and llama-3.3) are on top
+    // Sort models so preferred ones are on top, matching the default pick.
     chat_models.sort_by(|a, b| {
-        let a_pref = if a.id == "openai/gpt-oss-120b" { 0 } else if a.id.contains("llama-3.3") { 1 } else { 2 };
-        let b_pref = if b.id == "openai/gpt-oss-120b" { 0 } else if b.id.contains("llama-3.3") { 1 } else { 2 };
-        a_pref.cmp(&b_pref).then_with(|| a.id.cmp(&b.id))
+        let pref = |id: &str| {
+            if id == "openai/gpt-oss-20b" {
+                0
+            } else if id == "openai/gpt-oss-120b" {
+                1
+            } else if id.contains("llama-3.3") {
+                2
+            } else {
+                3
+            }
+        };
+        pref(&a.id).cmp(&pref(&b.id)).then_with(|| a.id.cmp(&b.id))
     });
 
     Ok(chat_models)
