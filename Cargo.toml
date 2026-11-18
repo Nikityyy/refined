@@ -13,7 +13,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tray-icon = "0.26"
 image = { version = "0.25", default-features = false, features = ["png"] }
-ureq = { version = "3", default-features = false, features = ["json", "platform-verifier"] }
+ureq = { version = "3", default-features = false, features = ["rustls", "json", "platform-verifier"] }
 
 [dependencies.windows]
 version = "0.62"

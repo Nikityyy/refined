@@ -43,6 +43,62 @@ fn main() -> eframe::Result {
     // Refresh Windows autostart entry if enabled
     autostart::refresh();
 
+    // Headless model list: `refined --list-models` prints all current chat
+    // model ids (one per line) using the REFINED_DEMO_KEY environment key.
+    if std::env::args().any(|a| a == "--list-models") {
+        let key = std::env::var("REFINED_DEMO_KEY").unwrap_or_default();
+        if key.trim().is_empty() {
+            eprintln!("REFINED_DEMO_KEY is not set");
+            std::process::exit(2);
+        }
+        match groq::fetch_chat_models(&key) {
+            Ok(models) => {
+                for m in models {
+                    println!("{}", m.id);
+                }
+            }
+            Err(err) => {
+                eprintln!("error: {err}");
+                std::process::exit(2);
+            }
+        }
+        return Ok(());
+    }
+
+    // Headless benchmark mode: `refined --bench=<model_id>` runs one Polish
+    // completion on a fixed sample with the REFINED_DEMO_KEY environment key and
+    // prints a JSON result line. Used to measure latency/quality per model.
+    if let Some(model) = std::env::args().find_map(|a| a.strip_prefix("--bench=").map(str::to_string)) {
+        let mut config = groq::GroqConfig::default();
+        if let Ok(k) = std::env::var("REFINED_DEMO_KEY") {
+            config.api_key = k;
+        }
+        config.model = model;
+        let polish = crate::actions::default_actions()
+            .into_iter()
+            .find(|a| a.id == "polish")
+            .map(|a| a.prompt_instruction)
+            .unwrap_or_default();
+        let sample = "The replacment of human editors with AI is unlikely to happen soon, \
+because AI models are unable to distinguishes between facts and convincing-sounding nonsense.";
+        match crate::groq::complete_action(&config, &polish, sample, "auto") {
+            Ok(resp) => {
+                let out = serde_json::json!({
+                    "model": config.model,
+                    "ms": resp.duration_ms,
+                    "chars": resp.text.chars().count(),
+                    "text": resp.text,
+                });
+                println!("{out}");
+            }
+            Err(err) => {
+                eprintln!("{{\"model\":\"{}\",\"error\":\"{err}\"}}", config.model);
+                std::process::exit(2);
+            }
+        }
+        return Ok(());
+    }
+
     // Load store
     let store = Arc::new(Mutex::new(store::Store::open()));
 

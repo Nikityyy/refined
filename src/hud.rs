@@ -236,6 +236,9 @@ impl Hud {
                         ctx.request_repaint();
                     }
                     HudWorkerMsg::Error(err) => {
+                        // Mirrors the on-screen error to stderr so failures are
+                        // diagnosable when launching from a console.
+                        eprintln!("[refined] action failed: {err}");
                         self.error_message = Some(err);
                         self.state = HudState::SelectingAction;
                         ctx.request_repaint();
