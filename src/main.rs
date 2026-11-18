@@ -74,17 +74,22 @@ fn main() -> eframe::Result {
             config.api_key = k;
         }
         config.model = model;
-        let polish = crate::actions::default_actions()
-            .into_iter()
-            .find(|a| a.id == "polish")
-            .map(|a| a.prompt_instruction)
-            .unwrap_or_default();
+        let action_id = std::env::args()
+            .find_map(|a| a.strip_prefix("--bench-action=").map(str::to_string))
+            .unwrap_or_else(|| "polish".to_string());
         let sample = "The replacment of human editors with AI is unlikely to happen soon, \
 because AI models are unable to distinguishes between facts and convincing-sounding nonsense.";
-        match crate::groq::complete_action(&config, &polish, sample, "auto") {
+        let (instruction, id_used) = crate::actions::default_actions()
+            .into_iter()
+            .find(|a| a.id == action_id)
+            .map(|a| (a.prompt_instruction, a.id))
+            .unwrap_or_default();
+        let instruction = instruction.replace("{user_instruction}", "a formal academic tone");
+        match crate::groq::complete_action(&config, &instruction, sample, "auto") {
             Ok(resp) => {
                 let out = serde_json::json!({
                     "model": config.model,
+                    "action": id_used,
                     "ms": resp.duration_ms,
                     "chars": resp.text.chars().count(),
                     "text": resp.text,
