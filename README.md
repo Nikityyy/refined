@@ -1,79 +1,60 @@
 # Refined
 
-> Select text anywhere on Windows. Press **Alt+Q**. Get it back better — instantly, in place, in any language.
+I write all day - notes, essays, emails - and the text is usually fine but never great. To fix a sentence I had to copy it into a chat window, wait, paste it back, and lose my place. That breaks the flow every single time.
 
-Refined is a lightweight study and writing companion for Windows. Select text in any application (browser, code editor, note taking app, office suite), press **Alt + Q**, and refine your prose with state-of-the-art Groq AI models in milliseconds.
+Refined fixes the text where it already is. Select any text in any app, press Alt+Q, pick an action. The text is replaced in place, a small window shows exactly what changed, and one key undoes it if the model made it worse. That's the whole product.
 
-> **Not an Adobe product. I just like how their stuff looks.**
-> Refined is mine. I built it for me, not for or with Adobe. The UI borrows the *look* of Adobe's published Spectrum design language because I admire it - nothing more. No Adobe code, no Adobe assets, no affiliation, no endorsement, nothing.
+<p>
+  <img src="docs/hud-diff.png" alt="The HUD showing a polished text with an inline diff" width="49%">
+  <img src="docs/studio-statistics.png" alt="The Studio statistics dashboard" width="49%">
+</p>
 
----
+> **This is NOT an Adobe product. Not Adobe. Not Adobe at all.**
+> Refined has no affiliation with, endorsement by, or connection to Adobe whatsoever. The UI follows the *look* of Adobe's published Spectrum design language purely because its author admires it - no Adobe code, assets, or resources are included. Refined was built by and for its author, not by or for Adobe.
 
-## Features
+## Install
 
-- **Contextual HUD (Alt + Q)**: Triggers only when text is actively selected. Pops up directly near your cursor.
-- **Immediate In-Place Replacement**: Replaces your selected text right away while keeping original structural formatting (paragraphs, line breaks, indentation, bullet points, numbering, and capitalization).
-- **Inline Diff View**: Instantly inspect word additions (emerald green) and deletions (ruby red strikethrough) with precise delta metrics.
-- **Keyboard-First Navigation**: Arrow keys, numbers `1`–`6` for instant triggers, `Enter` to run, `Esc` or click outside to dismiss.
-- **6 Core Actions** (reorder them to taste in Studio; number keys follow your order):
-  1. `Polish`: Elevates vocabulary, eliminates grammar flaws, preserves author voice.
-  2. `Condense`: Removes wordiness, fluff, and redundancy.
-  3. `Expand`: Unpacks nuance, provides illustrative depth and clarity.
-  4. `Structure`: Reorganizes prose into clear markdown headers and lists.
-  5. `Simplify`: Explains complex ideas in effortless plain language.
-  6. `Rewrite as...`: Tailor style on the fly (e.g. "executive summary", "academic", "concise email").
-- **Full Customization**: Edit system instructions for any built-in action, reset anytime with one click, reorder actions, or add your own custom actions.
-- **Multi-Language Engine**: Auto-detects and preserves original language by default, with quick-switching to English, German, French, Spanish, Italian, Japanese, Chinese, or any custom typed language.
-- **Groq AI Integration**:
-  - Live model list fetching from Groq (`GET /openai/v1/models`), filtered automatically to chat/reasoning models.
-  - Default model: `openai/gpt-oss-120b` with reasoning effort set to `high` and maximum completion tokens (`65,536`).
-  - Configurable temperature and top_p.
-- **Refined Studio (Full Dashboard)**:
-  - **History**: Searchable chronological archive of all your past refinements with before & after diffs and one-click copy.
-  - **Statistics**: Productivity insights including words refined, estimated human editing time saved, action breakdown charts, average inference speed, and 7-day activity timeline.
-  - **Actions**: Manage, customize, and extend the action palette.
-  - **Settings**: Manage Groq API keys, models, themes, and Windows autostart.
-- **Polished, Minimal UI**: Native dark and light themes, keyboard-first navigation throughout.
-- **Ultra-Optimized Binary & Installer**: Single small standalone binary (~5 MB) and Inno Setup installer with LZMA2 ultra compression.
+Windows 10 or 11 (64-bit). Download the latest `Refined-Setup` from the [releases page](https://github.com/Nikityyy/refined/releases/latest) and open it. It installs for your Windows account, adds Refined to the Start menu, and offers a desktop shortcut. No admin password needed. `Refined.exe` is also in the releases if you prefer to run it without installing - the whole app is a single 4.6 MB exe.
 
----
+The installer is not code-signed yet, so Windows may show an unknown-publisher or SmartScreen warning. Every release lists the SHA-256 checksum.
 
-## Building & Installing
+Grab a free API key from [console.groq.com/keys](https://console.groq.com/keys) and paste it in Settings on first launch. The key stays on your machine, and requests go from your machine straight to Groq.
 
-### Prerequisites
+To build it yourself, install [Rust](https://rustup.rs) with the Windows MSVC build tools and run `cargo build --release --locked`. For the installer you also need [Inno Setup 6](https://jrsoftware.org/inno-setup/downloads) and `powershell -File .\build-installer.ps1`.
 
-- Rust (2021 edition)
-- Windows 10 / 11
-- [Inno Setup 6](https://jrsoftware.org/isinfo.php) (for building the installer)
+## Use
 
-### Quick Build
+Select text anywhere. Press Alt+Q. The palette appears next to the selection:
 
-```powershell
-cargo build --release
-```
+- **1 Polish** - fix grammar and flow, keep my voice.
+- **2 Condense** - cut the filler, keep every fact.
+- **3 Expand** - flesh the ideas out.
+- **4 Structure** - headings, bullets, clean hierarchy.
+- **5 Simplify** - say it in plain language.
+- **6 Rewrite as...** - type how the text should be rewritten, e.g. "as a polite email".
 
-### Build Installer
+Number keys trigger, Esc dismisses, the language menu can force the output language. The refined text replaces the selection in the app you were writing in, then the summary shows what changed:
 
-```powershell
-powershell -ExecutionPolicy Bypass -File .\build-installer.ps1
-```
+- **Done** - close the summary.
+- **Ctrl+C** - copy the refined text.
+- **Ctrl+Z** - put my original text back.
 
-The installer will be generated in `target\installer\Refined-Setup-0.1.0.exe`.
+It also lives in the tray. Click the icon to open **Refined Studio**: history of every refinement with its diff, statistics over what the actions did, the prompt behind every action (edit them, add your own, reorder them - the number keys follow your order), and the model settings. The default model is `openai/gpt-oss-20b`: I benchmarked every chat model Groq offers, and it matched the big one's quality while being a good deal faster on the short edits that make up most of my day.
 
----
+## How it works
+
+Refined reads the selection through the clipboard, sends it to Groq with the action's instruction, and pastes the result back where the text was - normally around a second, the HUD shows the real number for every run.
+
+Everything else is local. The diff view is a word-level diff computed by an engine in the app, not sent anywhere. History and settings are JSON files in `%LOCALAPPDATA%\Refined`, written atomically (a crashed save can never leave a half-written file, and an unreadable one is kept as a `.corrupt` backup instead of being wiped). Statistics come from those stored diffs - "edit time saved" counts only the words that actually changed, retyped at 30 words per minute.
+
+The app is quiet: no window, no admin, no background network when you don't invoke it. Uninstalling removes the app and keeps your history.
+
+## Build notes
+
+I had the whole thing reviewed by a council of AI models with vision, round after round, until the UI survived every one of them. Refined was vibe-coded, hard - though not blindly: every screenshot was measured pixel-by-pixel, every claim about the app checked against the actual code, and a benchmark decides the default model, not vibes.
+
+Gemini 3.8 Flash was fired from that council early. It invented UI problems that did not exist, missed the ones that did, and confidently misread its own screenshots three times in a row. Gemini, if you are reading this: the right edge of the metric card really did overshoot by 16 pixels, and no, the fix was not "add more padding". It is not in the acknowledgments. The models that did the work get their names in the release notes.
 
 ## License
 
-MIT License. Copyright (c) 2026 Nikita Berger.
-
----
-
-## How this was built (honest notes)
-
-Refined was almost entirely written by AI coding agents, in rounds, with me acting as product owner and final judge of every pixel.
-
-- **Gemini 3.8 Flash** prototyped the first versions and gets the booby prize. It worked *many hours* and delivered the worst code in this repository: an inconsistent icon salad (three different visual weights visible in one HUD), monospace labels that rendered as "#####" tofu, statistics panels that overflowed their cards, eleven copy-pasted card-frame constructions with four variants of the same language-box logic — and, most damning, fabricated "evidence": hand-authored history fixtures the diff engine could never produce and a benchmark file with mojibake. Flash writes a lot. It fixes very little. Every one of its crypto-flattering first drafts had to be audited, measured, and largely replaced.
-- **GLM 5.3** (AI-quality judge across three review rounds) and **Mistral Large 4** (UI/UX judge) ran as independent review councils with a 9.5/10 acceptance bar — programmatically verifying diff reconstruction over every history entry, measuring latency budgets, grepping for dead code, and re-checking claimed fixes line by line. The engine, networking, and diff correctness you see today are what survived them.
-- **Mistral Vibe** (this agent) implemented everything you can see, to Spectrum-inspired tokens measured against Adobe's published design data, and re-verified visual claims pixel-by-pixel rather than trusting them.
-
-I judged every screenshot myself and rejected the UI loudly until it looked right.
+MIT
