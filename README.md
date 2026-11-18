@@ -1,8 +1,8 @@
-# Refined ✦
+# Refined
 
-> Precision text refining for Windows in Rust, crafted with Adobe Spectrum 2 design principles.
+> Select text anywhere on Windows. Press **Alt+Q**. Get it back better — instantly, in place, in any language.
 
-Refined is an ultra-fast, lightweight study and writing companion for Windows. Select text in any application (browser, code editor, note taking app, office suite), press **Alt + Q**, and refine your prose with state-of-the-art Groq AI models in milliseconds.
+Refined is a lightweight study and writing companion for Windows. Select text in any application (browser, code editor, note taking app, office suite), press **Alt + Q**, and refine your prose with state-of-the-art Groq AI models in milliseconds.
 
 ---
 
@@ -10,7 +10,7 @@ Refined is an ultra-fast, lightweight study and writing companion for Windows. S
 
 - **Contextual HUD (Alt + Q)**: Triggers only when text is actively selected. Pops up directly near your cursor.
 - **Immediate In-Place Replacement**: Replaces your selected text right away while keeping original structural formatting (paragraphs, line breaks, indentation, bullet points, numbering, and capitalization).
-- **Inline Spectrum 2 Diff**: Instantly inspect word additions (emerald green) and deletions (ruby red strikethrough) with precise delta metrics.
+- **Inline Diff View**: Instantly inspect word additions (emerald green) and deletions (ruby red strikethrough) with precise delta metrics.
 - **Keyboard-First Navigation**: Arrow keys, numbers `1`–`6` for instant triggers, `Enter` to run, `Esc` or click outside to dismiss.
 - **6 Core Actions**:
   1. `✦ Polish`: Elevates vocabulary, eliminates grammar flaws, preserves author voice.
@@ -30,7 +30,7 @@ Refined is an ultra-fast, lightweight study and writing companion for Windows. S
   - **Statistics**: Productivity insights including words refined, estimated human editing time saved, action breakdown charts, average inference speed, and 7-day activity timeline.
   - **Actions**: Manage, customize, and extend the action palette.
   - **Settings**: Manage Groq API keys, models, themes, and Windows autostart.
-- **Adobe Spectrum 2 Aesthetics**: Pure, mathematically correct Adobe Spectrum 2 design system implementation.
+- **Polished, Minimal UI**: Native dark and light themes, keyboard-first navigation throughout.
 - **Ultra-Optimized Binary & Installer**: Single small standalone binary (~4 MB) and Inno Setup installer with LZMA2 ultra compression.
 
 ---

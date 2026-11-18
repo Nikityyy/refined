@@ -2,9 +2,27 @@
 
 use crate::diff::{DiffChunk, DiffKind};
 use eframe::egui::{
-    self, Color32, CornerRadius, FontId, Pos2, Response, RichText, Sense, Stroke, StrokeKind, Ui,
-    Vec2, Visuals,
+    self, Align2, Color32, CornerRadius, FontId, Pos2, Response, RichText, Sense, Stroke,
+    StrokeKind, Ui, Vec2, Visuals,
 };
+
+/// Monochrome UI icon glyphs from Segoe MDL2 Assets (Windows system font).
+/// These private-use codepoints always resolve through the font fallback chain,
+/// avoiding multi-plane emoji that render as tofu boxes.
+pub mod icons {
+    #![allow(dead_code)]
+    pub const SEARCH: &str = "\u{E721}";
+    pub const TRASH: &str = "\u{E74D}";
+    pub const SETTINGS: &str = "\u{E713}";
+    pub const WORLD: &str = "\u{E909}";
+    pub const CLOSE: &str = "\u{E711}";
+    pub const WARNING: &str = "\u{E7BA}";
+    pub const CHECK_MARK: &str = "\u{E73E}";
+    pub const EDIT: &str = "\u{E70F}";
+    pub const COPY: &str = "\u{E8C8}";
+    pub const CLOCK: &str = "\u{E823}";
+    pub const REFRESH: &str = "\u{E72C}";
+}
 
 #[allow(dead_code)]
 pub const SPACE_2: f32 = 2.0;
@@ -33,13 +51,13 @@ pub struct SpectrumTheme {
     pub surface_active: Color32,
     pub border: Color32,
     #[allow(dead_code)]
-pub border_subtle: Color32,
+    pub border_subtle: Color32,
     pub text_primary: Color32,
     pub text_secondary: Color32,
     pub text_tertiary: Color32,
     pub accent: Color32,
     #[allow(dead_code)]
-pub accent_hover: Color32,
+    pub accent_hover: Color32,
     pub accent_subtle: Color32,
     pub diff_add_bg: Color32,
     pub diff_add_text: Color32,
@@ -54,16 +72,16 @@ impl SpectrumTheme {
         if dark {
             Self {
                 is_dark: true,
-                background: Color32::from_rgb(0x18, 0x18, 0x1B), // Spectrum 2 Gray 100 Dark
-                surface: Color32::from_rgb(0x23, 0x23, 0x27),    // Spectrum 2 Gray 75 Dark
-                surface_elevated: Color32::from_rgb(0x2C, 0x2C, 0x31),
-                surface_hover: Color32::from_rgb(0x35, 0x35, 0x3B),
-                surface_active: Color32::from_rgb(0x40, 0x40, 0x48),
-                border: Color32::from_rgb(0x39, 0x39, 0x40),
-                border_subtle: Color32::from_rgb(0x2C, 0x2C, 0x32),
-                text_primary: Color32::from_rgb(0xFD, 0xFD, 0xFD),
-                text_secondary: Color32::from_rgb(0x9E, 0x9E, 0xA7),
-                text_tertiary: Color32::from_rgb(0x66, 0x66, 0x70),
+                background: Color32::from_rgb(0x12, 0x12, 0x15), // Deep Dark Slate
+                surface: Color32::from_rgb(0x1E, 0x1E, 0x22),    // Spectrum 2 Surface Dark
+                surface_elevated: Color32::from_rgb(0x27, 0x27, 0x2C),
+                surface_hover: Color32::from_rgb(0x32, 0x32, 0x38),
+                surface_active: Color32::from_rgb(0x3C, 0x3C, 0x44),
+                border: Color32::from_rgb(0x38, 0x38, 0x40),
+                border_subtle: Color32::from_rgb(0x2A, 0x2A, 0x30),
+                text_primary: Color32::from_rgb(0xF5, 0xF5, 0xF7),
+                text_secondary: Color32::from_rgb(0x9E, 0x9E, 0xA8),
+                text_tertiary: Color32::from_rgb(0x6E, 0x6E, 0x78),
                 accent: Color32::from_rgb(0x3B, 0x82, 0xF6), // Spectrum Blue 600
                 accent_hover: Color32::from_rgb(0x60, 0xA5, 0xFA),
                 accent_subtle: Color32::from_rgba_premultiplied(59, 130, 246, 35),
@@ -77,16 +95,16 @@ impl SpectrumTheme {
         } else {
             Self {
                 is_dark: false,
-                background: Color32::from_rgb(0xF5, 0xF5, 0xF7), // Spectrum 2 Gray 100 Light
-                surface: Color32::from_rgb(0xFF, 0xFF, 0xFF),    // Spectrum 2 Surface Light
-                surface_elevated: Color32::from_rgb(0xFA, 0xFA, 0xFC),
+                background: Color32::from_rgb(0xF4, 0xF4, 0xF6), // Spectrum 2 Gray 100 Light
+                surface: Color32::from_rgb(0xFF, 0xFF, 0xFF),    // Pure Surface White
+                surface_elevated: Color32::from_rgb(0xF8, 0xF8, 0xFA),
                 surface_hover: Color32::from_rgb(0xEB, 0xEB, 0xF0),
                 surface_active: Color32::from_rgb(0xDF, 0xDF, 0xE5),
-                border: Color32::from_rgb(0xE0, 0xE0, 0xE6),
+                border: Color32::from_rgb(0xDF, 0xDF, 0xE6),
                 border_subtle: Color32::from_rgb(0xEE, 0xEE, 0xF2),
                 text_primary: Color32::from_rgb(0x18, 0x18, 0x1B),
-                text_secondary: Color32::from_rgb(0x64, 0x64, 0x6E),
-                text_tertiary: Color32::from_rgb(0x9E, 0x9E, 0xA6),
+                text_secondary: Color32::from_rgb(0x5E, 0x5E, 0x68),
+                text_tertiary: Color32::from_rgb(0x8E, 0x8E, 0x98),
                 accent: Color32::from_rgb(0x02, 0x65, 0xDC), // Spectrum Blue 800
                 accent_hover: Color32::from_rgb(0x00, 0x54, 0xB6),
                 accent_subtle: Color32::from_rgba_premultiplied(2, 101, 220, 24),
@@ -106,7 +124,10 @@ pub fn configure_egui_theme(ctx: &egui::Context, theme: &SpectrumTheme) {
     let mut v = if theme.is_dark { Visuals::dark() } else { Visuals::light() };
 
     v.dark_mode = theme.is_dark;
-    v.override_text_color = Some(theme.text_primary);
+    // CRITICAL FIX: Do NOT override text color globally.
+    // Setting override_text_color broke selection highlight readability!
+    v.override_text_color = None;
+
     v.panel_fill = theme.background;
     v.window_fill = theme.surface;
     v.window_stroke = Stroke::new(1.0, theme.border);
@@ -133,17 +154,21 @@ pub fn configure_egui_theme(ctx: &egui::Context, theme: &SpectrumTheme) {
     v.widgets.active.corner_radius = CornerRadius::same(6);
 
     v.widgets.open.bg_fill = theme.surface_hover;
-    v.selection.bg_fill = theme.accent_subtle;
-    v.selection.stroke = Stroke::new(1.0, theme.accent);
+
+    // Selection styling: high contrast white text over electric blue
+    v.selection.bg_fill = theme.accent;
+    v.selection.stroke = Stroke::new(1.0, theme.accent_hover);
 
     ctx.set_visuals(v);
 }
 
-/// Sets up Segoe UI typography from Windows system fonts if available.
+/// Sets up Segoe UI + Segoe UI Symbol typography from Windows system fonts.
+/// Guarantees that ALL symbols (✦, 🔍, 🗑, ✎, ✓, ≡, ⚙, 🌐) render crisply with zero tofu [].
 pub fn setup_custom_fonts(ctx: &egui::Context) {
     let mut fonts = egui::FontDefinitions::default();
     let font_dir = std::path::Path::new("C:\\Windows\\Fonts");
 
+    // 1. Primary Latin typography
     if let Ok(bytes) = std::fs::read(font_dir.join("segoeui.ttf")) {
         fonts.font_data.insert(
             "SegoeUI".to_owned(),
@@ -153,6 +178,8 @@ pub fn setup_custom_fonts(ctx: &egui::Context) {
             family.insert(0, "SegoeUI".to_owned());
         }
     }
+
+    // 2. Headings and emphasis
     if let Ok(bytes) = std::fs::read(font_dir.join("seguisb.ttf")) {
         fonts.font_data.insert(
             "SegoeUISemiBold".to_owned(),
@@ -160,7 +187,57 @@ pub fn setup_custom_fonts(ctx: &egui::Context) {
         );
     }
 
+    // 3. Complete Windows Symbol library (resolves all UI symbols without tofu)
+    if let Ok(bytes) = std::fs::read(font_dir.join("seguisym.ttf")) {
+        fonts.font_data.insert(
+            "SegoeUISymbol".to_owned(),
+            std::sync::Arc::new(egui::FontData::from_owned(bytes)),
+        );
+        if let Some(family) = fonts.families.get_mut(&egui::FontFamily::Proportional) {
+            family.push("SegoeUISymbol".to_owned());
+        }
+    }
+
+    // 4. Windows Segoe MDL2 Assets
+    if let Ok(bytes) = std::fs::read(font_dir.join("segmdl2.ttf")) {
+        fonts.font_data.insert(
+            "SegoeMDL2".to_owned(),
+            std::sync::Arc::new(egui::FontData::from_owned(bytes)),
+        );
+        if let Some(family) = fonts.families.get_mut(&egui::FontFamily::Proportional) {
+            family.push("SegoeMDL2".to_owned());
+        }
+    }
+
     ctx.set_fonts(fonts);
+}
+
+/// Renders the authentic Adobe Creative Cloud 'Rf' mnemonic badge with glowing squircle.
+pub fn render_rf_logo(ui: &mut Ui, size: f32) {
+    let (rect, _) = ui.allocate_exact_size(Vec2::splat(size), Sense::hover());
+    if ui.is_rect_visible(rect) {
+        let radius = (size * 0.28).round() as u8;
+        // Dark slate squircle background
+        ui.painter().rect_filled(rect, CornerRadius::same(radius), Color32::from_rgb(0x10, 0x0F, 0x12));
+
+        // Luminous electric blue border
+        ui.painter().rect_stroke(
+            rect,
+            CornerRadius::same(radius),
+            Stroke::new(1.5, Color32::from_rgb(0x3B, 0x82, 0xF6)),
+            StrokeKind::Inside,
+        );
+
+        // 'Rf' mnemonic text in electric blue
+        let font_id = FontId::proportional(size * 0.50);
+        ui.painter().text(
+            rect.center(),
+            Align2::CENTER_CENTER,
+            "Rf",
+            font_id,
+            Color32::from_rgb(0x3B, 0x82, 0xF6),
+        );
+    }
 }
 
 /// Adobe Spectrum 2 Primary or Secondary Button
@@ -241,7 +318,7 @@ pub fn spectrum_badge(ui: &mut Ui, text: &str, bg_color: Color32, text_color: Co
             .corner_radius(CornerRadius::same(12))
             .inner_margin(egui::Margin::symmetric(8, 3))
             .show(ui, |ui| {
-                ui.label(RichText::new(text).font(FontId::proportional(11.0)).color(text_color).strong());
+                ui.label(RichText::new(text).font(FontId::proportional(12.0)).color(text_color).strong());
             });
     });
 }

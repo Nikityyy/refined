@@ -4,7 +4,7 @@ use crate::actions::{standard_languages, ActionItem};
 use crate::diff::{compute_diff, DiffChunk, DiffStats};
 use crate::groq::{complete_action, GroqConfig};
 use crate::history::HistoryEntry;
-use crate::theme::{render_diff_view, spectrum_badge, spectrum_button, SpectrumTheme};
+use crate::theme::{icons, render_diff_view, spectrum_badge, spectrum_button, SpectrumTheme};
 use eframe::egui::{self, Color32, CornerRadius, FontId, Key, Pos2, RichText, Sense, Stroke, Ui};
 use std::sync::mpsc::{channel, Receiver, Sender};
 use windows::Win32::Foundation::{HWND, POINT};
@@ -54,6 +54,8 @@ pub struct Hud {
     pub worker_rx: Option<Receiver<HudWorkerMsg>>,
     pub worker_tx: Sender<HudWorkerMsg>,
     pub just_opened: bool,
+    /// Demo mode: do not auto-dismiss on focus loss (so the UI can be inspected).
+    pub demo_sticky: bool,
 }
 
 /// Computes multi-monitor clamped HUD position using Win32 monitor coordinates.
@@ -104,6 +106,7 @@ impl Hud {
             worker_rx: Some(worker_rx),
             worker_tx,
             just_opened: false,
+            demo_sticky: false,
         }
     }
 
@@ -270,24 +273,24 @@ impl Hud {
             );
             ui.label(
                 RichText::new(format!("({} words)", self.original_text.split_whitespace().count()))
-                    .font(FontId::proportional(11.0))
+                    .font(FontId::proportional(12.0))
                     .color(theme.text_secondary),
             );
 
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui.add(egui::Button::new(RichText::new("✕").color(theme.text_secondary)).frame(false)).clicked() {
+                if ui.add(egui::Button::new(RichText::new(icons::CLOSE).color(theme.text_secondary)).frame(false)).clicked() {
                     self.close();
                 }
 
-                if ui.add(egui::Button::new(RichText::new("⚙ Studio").font(FontId::proportional(11.0)).color(theme.text_secondary)).frame(false)).clicked() {
+                if ui.add(egui::Button::new(RichText::new(format!("{} Studio", icons::SETTINGS)).font(FontId::proportional(12.0)).color(theme.text_secondary)).frame(false)).clicked() {
                     on_open_studio();
                     self.close();
                 }
 
                 // Language dropdown
                 egui::ComboBox::from_id_salt("hud_language_select")
-                    .selected_text(RichText::new(format!("🌐 {}", selected_language)).font(FontId::proportional(11.0)))
-                    .width(90.0)
+                    .selected_text(RichText::new(format!("{} {}", icons::WORLD, selected_language)).font(FontId::proportional(12.0)))
+                    .width(118.0)
                     .show_ui(ui, |ui| {
                         for lang in standard_languages() {
                             if ui.selectable_label(*selected_language == lang.code, &lang.label).clicked() {
@@ -301,7 +304,7 @@ impl Hud {
         if *selected_language == "custom" {
             ui.add_space(4.0);
             ui.horizontal(|ui| {
-                ui.label(RichText::new("Language:").font(FontId::proportional(11.0)).color(theme.text_secondary));
+                ui.label(RichText::new("Language:").font(FontId::proportional(12.0)).color(theme.text_secondary));
                 ui.text_edit_singleline(custom_language);
             });
         }
@@ -318,7 +321,7 @@ impl Hud {
                     .corner_radius(CornerRadius::same(6))
                     .inner_margin(egui::Margin::same(8))
                     .show(ui, |ui| {
-                        ui.label(RichText::new(format!("⚠ {err}")).color(theme.diff_del_text).font(FontId::proportional(12.0)));
+                        ui.label(RichText::new(format!("{} {}", icons::WARNING, err)).color(theme.diff_del_text).font(FontId::proportional(12.0)));
                     });
             });
             ui.add_space(6.0);
@@ -411,7 +414,7 @@ impl Hud {
                                 );
                                 ui.label(
                                     RichText::new(&action.description)
-                                        .font(FontId::proportional(11.0))
+                                        .font(FontId::proportional(12.0))
                                         .color(theme.text_secondary),
                                 );
                             });
@@ -440,14 +443,14 @@ impl Hud {
             HudState::RewriteAsInput { action_idx } => {
                 let action = &actions[*action_idx];
                 ui.label(
-                    RichText::new(format!("✎ {}", action.name))
+                    RichText::new(format!("{} {}", icons::EDIT, action.name))
                         .font(FontId::proportional(13.0))
                         .color(theme.accent)
                         .strong(),
                 );
                 ui.label(
                     RichText::new("Enter instructions for how to rewrite the selected text:")
-                        .font(FontId::proportional(11.0))
+                        .font(FontId::proportional(12.0))
                         .color(theme.text_secondary),
                 );
                 ui.add_space(4.0);
@@ -490,7 +493,7 @@ impl Hud {
                     );
                     ui.label(
                         RichText::new(format!("Applying action: {action_name}"))
-                            .font(FontId::proportional(11.0))
+                            .font(FontId::proportional(12.0))
                             .color(theme.text_secondary),
                     );
                     ui.add_space(8.0);
@@ -506,14 +509,14 @@ impl Hud {
                 duration_ms,
             } => {
                 ui.horizontal(|ui| {
-                    spectrum_badge(ui, "✓ Replaced in App", theme.diff_add_bg, theme.diff_add_text);
+                    spectrum_badge(ui, &format!("{} Replaced in place", icons::CHECK_MARK), theme.diff_add_bg, theme.diff_add_text);
                     ui.add_space(4.0);
                     spectrum_badge(ui, action_name, theme.accent_subtle, theme.accent);
 
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         ui.label(
                             RichText::new(format!("{}ms • {}", duration_ms, model))
-                                .font(FontId::proportional(11.0))
+                                .font(FontId::proportional(12.0))
                                 .color(theme.text_secondary),
                         );
                     });
@@ -553,7 +556,7 @@ impl Hud {
 
                 ui.add_space(8.0);
                 ui.horizontal(|ui| {
-                    if spectrum_button(ui, "Copy Refined [Ctrl+C]", false, theme).clicked()
+                    if spectrum_button(ui, &format!("{} Copy [Ctrl+C]", icons::COPY), false, theme).clicked()
                         || (ctx.input(|i| i.modifiers.command && i.key_pressed(Key::C)))
                     {
                         crate::clipboard::set_clipboard_text(refined_text);

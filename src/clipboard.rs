@@ -213,6 +213,12 @@ pub fn capture_selection() -> Option<String> {
 /// Replaces text in target window: restores target window focus, normalizes CRLF,
 /// pastes via Ctrl+V.
 pub fn replace_selection_in_target(target_hwnd: HWND, new_text: &str) -> bool {
+    // No known target window (e.g. demo mode): never send a paste into
+    // whatever happens to be in the foreground.
+    if target_hwnd.0.is_null() {
+        return false;
+    }
+
     // Normalize newlines to standard Windows CRLF for consistent paragraph pasting
     let normalized = new_text.replace("\r\n", "\n").replace('\n', "\r\n");
 

@@ -50,7 +50,7 @@ impl Tray {
 
         let icon = TrayIconBuilder::new()
             .with_icon(Icon::from_rgba(crate::icon::rgba(32), 32, 32).expect("icon"))
-            .with_tooltip("Refined - Alt + Q Text Refiner")
+            .with_tooltip("Refined — Alt+Q Text Refiner")
             .with_menu(Box::new(menu))
             .with_menu_on_left_click(false)
             .build()

@@ -5,7 +5,7 @@ use crate::groq::GroqConfig;
 use crate::history::HistoryEntry;
 use serde::{Deserialize, Serialize};
 use std::fs::{create_dir_all, File};
-use std::io::{BufReader, BufWriter};
+use std::io::BufWriter;
 use std::path::PathBuf;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -52,6 +52,11 @@ pub struct Store {
     data_dir: PathBuf,
 }
 
+/// Returns the app data directory used by the store.
+pub fn data_dir() -> PathBuf {
+    dirs_fallback_app_data()
+}
+
 impl Store {
     pub fn open() -> Self {
         let data_dir = dirs_fallback_app_data();
@@ -59,20 +64,14 @@ impl Store {
 
         let settings_file = data_dir.join("settings.json");
         let settings = if settings_file.exists() {
-            File::open(&settings_file)
-                .ok()
-                .and_then(|f| serde_json::from_reader(BufReader::new(f)).ok())
-                .unwrap_or_default()
+            read_json_bom_tolerant(&settings_file).unwrap_or_default()
         } else {
             AppSettings::default()
         };
 
         let history_file = data_dir.join("history.json");
         let history = if history_file.exists() {
-            File::open(&history_file)
-                .ok()
-                .and_then(|f| serde_json::from_reader(BufReader::new(f)).ok())
-                .unwrap_or_default()
+            read_json_bom_tolerant(&history_file).unwrap_or_default()
         } else {
             Vec::new()
         };
@@ -112,6 +111,33 @@ impl Store {
         self.history.clear();
         self.save_history();
     }
+
+    pub fn delete_history_entry(&mut self, id: &str) {
+        self.history.retain(|e| e.id != id);
+        self.save_history();
+    }
+
+    pub fn reset_all_actions(&mut self) {
+        self.settings.actions = default_actions();
+        self.save_settings();
+    }
+
+    pub fn add_custom_action(&mut self, action: ActionItem) {
+        self.settings.actions.push(action);
+        self.save_settings();
+    }
+
+    pub fn reset_action_to_default(&mut self, id: &str) {
+        if let Some(action) = self.settings.actions.iter_mut().find(|a| a.id == id) {
+            action.reset_to_default();
+        }
+        self.save_settings();
+    }
+
+    pub fn delete_custom_action(&mut self, id: &str) {
+        self.settings.actions.retain(|a| a.id != id);
+        self.save_settings();
+    }
 }
 
 fn dirs_fallback_app_data() -> PathBuf {
@@ -120,4 +146,13 @@ fn dirs_fallback_app_data() -> PathBuf {
     } else {
         PathBuf::from("Refined_Data")
     }
+}
+
+/// Reads a JSON file, tolerating a UTF-8 BOM prefix (serde_json rejects BOMs,
+/// and several Windows editors/scripts write them) so user data is never
+/// silently discarded over a 3-byte prefix.
+fn read_json_bom_tolerant<T: serde::de::DeserializeOwned>(path: &std::path::Path) -> Option<T> {
+    let text = std::fs::read_to_string(path).ok()?;
+    let trimmed = text.trim_start_matches('\u{feff}');
+    serde_json::from_str(trimmed).ok()
 }

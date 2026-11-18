@@ -1,8 +1,8 @@
 [package]
 name = "refined"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
-description = "Adobe Spectrum 2 AI text refiner for Windows."
+description = "AI text refiner for Windows: select text anywhere, press Alt+Q, get polished text back in place."
 license = "MIT"
 
 [dependencies]

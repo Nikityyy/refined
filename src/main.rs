@@ -53,10 +53,23 @@ fn main() -> eframe::Result {
 
     // Window options
     let hidden = std::env::args().any(|a| a == "--hidden");
+    let demo = std::env::args().any(|a| a == "--demo");
+    let demo_tab = std::env::args()
+        .find_map(|a| a.strip_prefix("--demo-tab=").map(str::to_string));
+    // --demo-size=WIDTHxHEIGHT : bigger window so full pages (e.g. charts) are visible
+    let demo_size = std::env::args().find_map(|a| {
+        let s = a.strip_prefix("--demo-size=")?;
+        let (w, h) = s.split_once('x')?;
+        Some([w.parse::<f32>().ok()?, h.parse::<f32>().ok()?])
+    });
+    // --demo-run=<action_id> : auto-trigger the given action on the demo text
+    // (used with a real API key to capture the Processing and Diff screens end-to-end)
+    let demo_run = std::env::args()
+        .find_map(|a| a.strip_prefix("--demo-run=").map(str::to_string));
     let options = eframe::NativeOptions {
         viewport: eframe::egui::ViewportBuilder::default()
-            .with_title("Refined - Adobe Spectrum 2 Text Refiner")
-            .with_inner_size([960.0, 680.0])
+            .with_title("Refined Studio")
+            .with_inner_size(if demo { demo_size.unwrap_or([960.0, 680.0]) } else { [960.0, 680.0] })
             .with_min_inner_size([740.0, 520.0])
             .with_icon(Arc::new(eframe::egui::IconData {
                 rgba: icon::rgba(64),
@@ -79,7 +92,10 @@ fn main() -> eframe::Result {
                 hotkey_rx,
                 restore_event,
                 quitting_for_app,
-                !hidden,
+                !hidden || demo,
+                demo,
+                demo_tab,
+                demo_run,
             )))
         }),
     );
