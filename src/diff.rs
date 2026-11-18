@@ -29,14 +29,6 @@ impl DiffStats {
     pub fn word_delta(&self) -> isize {
         self.refined_words as isize - self.original_words as isize
     }
-
-    #[allow(dead_code)]
-    pub fn percent_change(&self) -> f32 {
-        if self.original_words == 0 {
-            return 0.0;
-        }
-        ((self.refined_words as f32 - self.original_words as f32) / self.original_words as f32) * 100.0
-    }
 }
 
 /// Returns true if character is a CJK ideograph, Kana, or Hangul symbol

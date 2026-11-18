@@ -45,10 +45,6 @@ pub struct CompletionResponse {
     pub text: String,
     pub duration_ms: u128,
     pub model: String,
-    #[allow(dead_code)]
-pub prompt_tokens: Option<u64>,
-    #[allow(dead_code)]
-pub completion_tokens: Option<u64>,
 }
 
 #[derive(Deserialize)]
@@ -89,16 +85,8 @@ struct ChatChoiceMessage {
 }
 
 #[derive(Deserialize)]
-struct ChatUsage {
-    prompt_tokens: Option<u64>,
-    completion_tokens: Option<u64>,
-}
-
-#[derive(Deserialize)]
 struct ChatCompletionResponse {
     choices: Vec<ChatChoice>,
-    #[serde(default)]
-    usage: Option<ChatUsage>,
 }
 
 /// Upper bound for any single Groq HTTP call. ureq has no default timeout,
@@ -111,8 +99,17 @@ const HTTP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(45);
 fn http_agent() -> &'static ureq::Agent {
     static AGENT: std::sync::OnceLock<ureq::Agent> = std::sync::OnceLock::new();
     AGENT.get_or_init(|| {
+        // schannel (Windows' own TLS) instead of ring+rustls: same trust
+        // behavior via the Windows certificate store, roughly a megabyte
+        // less binary.
         ureq::Agent::config_builder()
             .timeout_per_call(Some(HTTP_TIMEOUT))
+            .tls_config(
+                ureq::tls::TlsConfig::builder()
+                    .provider(ureq::tls::TlsProvider::NativeTls)
+                    .root_certs(ureq::tls::RootCerts::PlatformVerifier)
+                    .build(),
+            )
             .build()
             .new_agent()
     })
@@ -295,11 +292,13 @@ pub fn complete_action(
         {
             Ok(r) => break Ok(r),
             Err(e) => {
+                // Only fall back on parameter-rejection style errors (HTTP
+                // 400, read off the typed status); on auth/quota/network
+                // failures retrying is pointless.
+                let is_bad_request =
+                    matches!(e, ureq::Error::StatusCode(400));
                 last_err = e.to_string();
-                // Only fall back on parameter-rejection style errors; on
-                // auth/quota/network failures retrying is pointless.
-                let msg = last_err.to_lowercase();
-                if !msg.contains("400") && !msg.contains("bad request") {
+                if !is_bad_request {
                     break Err(format!("Groq API error: {last_err}"));
                 }
                 if attempts.len() > 1 {
@@ -349,17 +348,9 @@ pub fn complete_action(
         }
     };
 
-    let (prompt_tokens, completion_tokens) = if let Some(u) = body.usage {
-        (u.prompt_tokens, u.completion_tokens)
-    } else {
-        (None, None)
-    };
-
     Ok(CompletionResponse {
         text: clean_generated_text(&content, user_text),
         duration_ms,
         model: config.model.clone(),
-        prompt_tokens,
-        completion_tokens,
     })
 }

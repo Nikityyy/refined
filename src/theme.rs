@@ -12,10 +12,9 @@ use eframe::egui::{
 };
 
 /// Monochrome UI icon glyphs from Segoe MDL2 Assets (Windows system font).
-/// One icon set, one optical weight - the app's only icon family.
+/// One icon set, one optical weight - the app's only icon family. Every
+/// constant here must have a call site; the compiler enforces it.
 pub mod icons {
-    #![allow(dead_code)]
-    pub const SEARCH: &str = "\u{E721}";
     pub const TRASH: &str = "\u{E74D}";
     pub const SETTINGS: &str = "\u{E713}";
     pub const WORLD: &str = "\u{E909}";
@@ -24,7 +23,6 @@ pub mod icons {
     pub const CHECK_MARK: &str = "\u{E73E}";
     pub const EDIT: &str = "\u{E70F}";
     pub const COPY: &str = "\u{E8C8}";
-    pub const CLOCK: &str = "\u{E823}";
     pub const REFRESH: &str = "\u{E72C}";
     pub const CHEVRON_DOWN: &str = "\u{E96D}";
     pub const CHEVRON_UP: &str = "\u{E96E}";
@@ -189,13 +187,6 @@ pub fn setup_custom_fonts(ctx: &egui::Context) {
         if let Some(family) = fonts.families.get_mut(&egui::FontFamily::Proportional) {
             family.insert(0, "SegoeUI".to_owned());
         }
-    }
-
-    if let Ok(bytes) = std::fs::read(font_dir.join("seguisb.ttf")) {
-        fonts.font_data.insert(
-            "SegoeUISemiBold".to_owned(),
-            std::sync::Arc::new(egui::FontData::from_owned(bytes)),
-        );
     }
 
     if let Ok(bytes) = std::fs::read(font_dir.join("seguisym.ttf")) {

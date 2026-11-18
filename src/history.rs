@@ -12,6 +12,10 @@ pub struct HistoryEntry {
     pub action_name: String,
     pub original_text: String,
     pub refined_text: String,
+    /// Never persisted: the chunks are recomputed from the two texts at
+    /// load time (the diff engine is deterministic), which roughly halves
+    /// the history file size and the write time.
+    #[serde(default, skip_serializing)]
     pub diff_chunks: Vec<DiffChunk>,
     pub stats: DiffStats,
     pub model: String,

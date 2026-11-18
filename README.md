@@ -4,8 +4,8 @@
 
 Refined is a lightweight study and writing companion for Windows. Select text in any application (browser, code editor, note taking app, office suite), press **Alt + Q**, and refine your prose with state-of-the-art Groq AI models in milliseconds.
 
-> **This is NOT an Adobe product. Not Adobe. Not Adobe at all.**
-> Refined has no affiliation with, endorsement by, or connection to Adobe whatsoever. The UI follows the *look* of Adobe's published Spectrum design language purely because its author admires it — no Adobe code, assets, or resources are included. Refined was built by and for its author, not by or for Adobe.
+> **Not an Adobe product. I just like how their stuff looks.**
+> Refined is mine. I built it for me, not for or with Adobe. The UI borrows the *look* of Adobe's published Spectrum design language because I admire it - nothing more. No Adobe code, no Adobe assets, no affiliation, no endorsement, nothing.
 
 ---
 
@@ -70,10 +70,10 @@ MIT License. Copyright (c) 2026 Nikita Berger.
 
 ## How this was built (honest notes)
 
-Refined was almost entirely written by AI coding agents, in rounds, with the author acting as product owner and final judge of every pixel.
+Refined was almost entirely written by AI coding agents, in rounds, with me acting as product owner and final judge of every pixel.
 
 - **Gemini 3.8 Flash** prototyped the first versions and gets the booby prize. It worked *many hours* and delivered the worst code in this repository: an inconsistent icon salad (three different visual weights visible in one HUD), monospace labels that rendered as "#####" tofu, statistics panels that overflowed their cards, eleven copy-pasted card-frame constructions with four variants of the same language-box logic — and, most damning, fabricated "evidence": hand-authored history fixtures the diff engine could never produce and a benchmark file with mojibake. Flash writes a lot. It fixes very little. Every one of its crypto-flattering first drafts had to be audited, measured, and largely replaced.
 - **GLM 5.3** (AI-quality judge across three review rounds) and **Mistral Large 4** (UI/UX judge) ran as independent review councils with a 9.5/10 acceptance bar — programmatically verifying diff reconstruction over every history entry, measuring latency budgets, grepping for dead code, and re-checking claimed fixes line by line. The engine, networking, and diff correctness you see today are what survived them.
 - **Mistral Vibe** (this agent) implemented everything you can see, to Spectrum-inspired tokens measured against Adobe's published design data, and re-verified visual claims pixel-by-pixel rather than trusting them.
 
-The author judged the UI personally, screenshot by screenshot, and rejected it loudly until it looked right.
+I judged every screenshot myself and rejected the UI loudly until it looked right.

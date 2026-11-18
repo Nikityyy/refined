@@ -21,6 +21,10 @@ impl Default for ThemeMode {
     }
 }
 
+/// Hard cap on stored refinements; the history file must stay tiny enough
+/// that saving it never stalls the UI thread.
+const HISTORY_LIMIT: usize = 500;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppSettings {
     pub groq: GroqConfig,
@@ -28,7 +32,6 @@ pub struct AppSettings {
     pub selected_language: String,
     pub custom_language: String,
     pub theme_mode: ThemeMode,
-    pub history_limit: usize,
 }
 
 impl Default for AppSettings {
@@ -39,7 +42,6 @@ impl Default for AppSettings {
             selected_language: "auto".to_string(),
             custom_language: String::new(),
             theme_mode: ThemeMode::Dark,
-            history_limit: 500,
         }
     }
 }
@@ -50,7 +52,6 @@ pub struct Store {
     data_dir: PathBuf,
 }
 
-
 impl Store {
     pub fn open() -> Self {
         let data_dir = dirs_fallback_app_data();
@@ -58,17 +59,50 @@ impl Store {
 
         let settings_file = data_dir.join("settings.json");
         let settings = if settings_file.exists() {
-            read_json_bom_tolerant(&settings_file).unwrap_or_default()
+            match read_json_bom_tolerant::<AppSettings>(&settings_file) {
+                Some(s) => s,
+                // A silent default would wipe the stored API key and every
+                // customization without a trace; say it happened.
+                None => {
+                    eprintln!(
+                        "[refined] settings.json unreadable, using defaults (backup will be created)"
+                    );
+                    let _ = std::fs::rename(
+                        &settings_file,
+                        data_dir.join("settings.json.corrupt"),
+                    );
+                    AppSettings::default()
+                }
+            }
         } else {
             AppSettings::default()
         };
 
         let history_file = data_dir.join("history.json");
-        let history = if history_file.exists() {
-            read_json_bom_tolerant(&history_file).unwrap_or_default()
+        let mut history: Vec<HistoryEntry> = if history_file.exists() {
+            match read_json_bom_tolerant::<Vec<HistoryEntry>>(&history_file) {
+                Some(h) => h,
+                None => {
+                    eprintln!(
+                        "[refined] history.json unreadable, history starts empty (backup will be created)"
+                    );
+                    let _ =
+                        std::fs::rename(&history_file, data_dir.join("history.json.corrupt"));
+                    Vec::new()
+                }
+            }
         } else {
             Vec::new()
         };
+        // The chunks are not persisted (they double the file for data the
+        // diff engine recomputes deterministically); restore them in memory.
+        for entry in &mut history {
+            if entry.diff_chunks.is_empty() {
+                let (chunks, _stats) =
+                    crate::diff::compute_diff(&entry.original_text, &entry.refined_text);
+                entry.diff_chunks = chunks;
+            }
+        }
 
         Self {
             settings,
@@ -110,8 +144,8 @@ impl Store {
 
     pub fn add_history(&mut self, entry: HistoryEntry) {
         self.history.insert(0, entry);
-        if self.history.len() > self.settings.history_limit {
-            self.history.truncate(self.settings.history_limit);
+        if self.history.len() > HISTORY_LIMIT {
+            self.history.truncate(HISTORY_LIMIT);
         }
         self.save_history();
     }

@@ -26,6 +26,9 @@ use windows::Win32::System::Threading::{CreateEventW, CreateMutexW, SetEvent};
 pub const INSTANCE_MUTEX: PCWSTR = w!("Local\\Refined");
 pub const RESTORE_EVENT: PCWSTR = w!("Local\\Refined.Restore");
 
+// Demo / capture / benchmark scaffolding, kept out of shipped binaries via
+// the `demo` cargo feature.
+#[cfg(feature = "demo")]
 #[derive(serde::Deserialize)]
 struct HistorySeed {
     action_id: String,
@@ -37,6 +40,7 @@ struct HistorySeed {
 }
 
 /// Writes demo history entries computed through the real diff engine.
+#[cfg(feature = "demo")]
 fn seed_history(path: &str) {
     let content = match std::fs::read_to_string(path) {
         Ok(c) => c,
@@ -77,23 +81,8 @@ fn seed_history(path: &str) {
     println!("seeded {} history entries", store.history.len());
 }
 
-fn main() -> eframe::Result {
-    // Single instance mutex and restore event
-    let restore_event = unsafe { CreateEventW(None, false, false, RESTORE_EVENT) }.expect("restore event");
-    let instance = unsafe { CreateMutexW(None, true, INSTANCE_MUTEX) }.expect("instance mutex");
-
-    if unsafe { GetLastError() } == ERROR_ALREADY_EXISTS {
-        unsafe {
-            let _ = SetEvent(restore_event);
-            let _ = CloseHandle(restore_event);
-            let _ = CloseHandle(instance);
-        }
-        return Ok(());
-    }
-
-    // Refresh Windows autostart entry if enabled
-    autostart::refresh();
-
+#[cfg(feature = "demo")]
+fn demo_only_modes() -> bool {
     // Headless model list: `refined --list-models` prints all current chat
     // model ids (one per line) using the REFINED_DEMO_KEY environment key.
     if std::env::args().any(|a| a == "--list-models") {
@@ -113,13 +102,15 @@ fn main() -> eframe::Result {
                 std::process::exit(2);
             }
         }
-        return Ok(());
+        return true;
     }
 
     // Headless benchmark mode: `refined --bench=<model_id>` runs one Polish
     // completion on a fixed sample with the REFINED_DEMO_KEY environment key and
     // prints a JSON result line. Used to measure latency/quality per model.
-    if let Some(model) = std::env::args().find_map(|a| a.strip_prefix("--bench=").map(str::to_string)) {
+    if let Some(model) =
+        std::env::args().find_map(|a| a.strip_prefix("--bench=").map(str::to_string))
+    {
         let mut config = groq::GroqConfig::default();
         if let Ok(k) = std::env::var("REFINED_DEMO_KEY") {
             config.api_key = k;
@@ -152,7 +143,7 @@ because AI models are unable to distinguishes between facts and convincing-sound
                 std::process::exit(2);
             }
         }
-        return Ok(());
+        return true;
     }
 
     // Demo seeding: `refined --seed-history=<file>` loads a JSON array of
@@ -160,8 +151,39 @@ because AI models are unable to distinguishes between facts and convincing-sound
     // duration_ms} records and writes real history entries whose diff chunks
     // and stats come from the production diff engine, so captures show only
     // data the app could have produced itself.
-    if let Some(seed_file) = std::env::args().find_map(|a| a.strip_prefix("--seed-history=").map(str::to_string)) {
+    if let Some(seed_file) =
+        std::env::args().find_map(|a| a.strip_prefix("--seed-history=").map(str::to_string))
+    {
         seed_history(&seed_file);
+        return true;
+    }
+
+    false
+}
+
+#[cfg(not(feature = "demo"))]
+fn demo_only_modes() -> bool {
+    false
+}
+
+fn main() -> eframe::Result {
+    // Single instance mutex and restore event
+    let restore_event = unsafe { CreateEventW(None, false, false, RESTORE_EVENT) }.expect("restore event");
+    let instance = unsafe { CreateMutexW(None, true, INSTANCE_MUTEX) }.expect("instance mutex");
+
+    if unsafe { GetLastError() } == ERROR_ALREADY_EXISTS {
+        unsafe {
+            let _ = SetEvent(restore_event);
+            let _ = CloseHandle(restore_event);
+            let _ = CloseHandle(instance);
+        }
+        return Ok(());
+    }
+
+    // Refresh Windows autostart entry if enabled
+    autostart::refresh();
+
+    if demo_only_modes() {
         return Ok(());
     }
 
@@ -176,30 +198,30 @@ because AI models are unable to distinguishes between facts and convincing-sound
 
     // Window options
     let hidden = std::env::args().any(|a| a == "--hidden");
-    let demo = std::env::args().any(|a| a == "--demo");
-    let demo_tab = std::env::args()
-        .find_map(|a| a.strip_prefix("--demo-tab=").map(str::to_string));
-    // --demo-size=WIDTHxHEIGHT : bigger window so full pages (e.g. charts) are visible
-    let demo_size = std::env::args().find_map(|a| {
-        let s = a.strip_prefix("--demo-size=")?;
-        let (w, h) = s.split_once('x')?;
-        Some([w.parse::<f32>().ok()?, h.parse::<f32>().ok()?])
-    });
-    // --demo-run=<action_id> : auto-trigger the given action on the demo text
-    // (used with a real API key to capture the Processing and Diff screens end-to-end)
-    let demo_run = std::env::args()
-        .find_map(|a| a.strip_prefix("--demo-run=").map(str::to_string));
+    #[cfg(feature = "demo")]
+    let demo_opts = app::DemoOptions::parse();
+    #[cfg(not(feature = "demo"))]
+    let demo_opts = app::DemoOptions::none();
+
+    #[cfg(feature = "demo")]
+    let inner_size = demo_opts
+        .size
+        .unwrap_or([960.0, 680.0]);
+    #[cfg(not(feature = "demo"))]
+    let inner_size = [960.0, 680.0];
+
+    let initial_visible = !hidden || demo_opts.active;
     let options = eframe::NativeOptions {
         viewport: eframe::egui::ViewportBuilder::default()
             .with_title("Refined Studio")
-            .with_inner_size(if demo { demo_size.unwrap_or([960.0, 680.0]) } else { [960.0, 680.0] })
+            .with_inner_size(inner_size)
             .with_min_inner_size([740.0, 520.0])
             .with_icon(Arc::new(eframe::egui::IconData {
                 rgba: icon::rgba(64),
                 width: 64,
                 height: 64,
             }))
-            .with_visible(!hidden),
+            .with_visible(initial_visible),
         ..Default::default()
     };
 
@@ -217,10 +239,8 @@ because AI models are unable to distinguishes between facts and convincing-sound
                 hotkey_failed_for_app,
                 restore_event,
                 quitting_for_app,
-                !hidden || demo,
-                demo,
-                demo_tab,
-                demo_run,
+                initial_visible,
+                demo_opts,
             )))
         }),
     );

@@ -103,17 +103,20 @@ pub struct LanguageChoice {
     pub code: String,
 }
 
-pub fn standard_languages() -> Vec<LanguageChoice> {
-    vec![
-        LanguageChoice { label: "Auto (Same as text)".to_string(), code: "auto".to_string() },
-        LanguageChoice { label: "English".to_string(), code: "English".to_string() },
-        LanguageChoice { label: "German (Deutsch)".to_string(), code: "German".to_string() },
-        LanguageChoice { label: "French (Français)".to_string(), code: "French".to_string() },
-        LanguageChoice { label: "Spanish (Español)".to_string(), code: "Spanish".to_string() },
-        LanguageChoice { label: "Italian (Italiano)".to_string(), code: "Italian".to_string() },
-        LanguageChoice { label: "Portuguese (Português)".to_string(), code: "Portuguese".to_string() },
-        LanguageChoice { label: "Japanese (日本語)".to_string(), code: "Japanese".to_string() },
-        LanguageChoice { label: "Chinese (简体中文)".to_string(), code: "Simplified Chinese".to_string() },
-        LanguageChoice { label: "Custom...".to_string(), code: "custom".to_string() },
-    ]
+pub fn standard_languages() -> &'static [LanguageChoice] {
+    static LANGUAGES: std::sync::OnceLock<Vec<LanguageChoice>> = std::sync::OnceLock::new();
+    LANGUAGES.get_or_init(|| {
+        vec![
+            LanguageChoice { label: "Auto (Same as text)".to_string(), code: "auto".to_string() },
+            LanguageChoice { label: "English".to_string(), code: "English".to_string() },
+            LanguageChoice { label: "German (Deutsch)".to_string(), code: "German".to_string() },
+            LanguageChoice { label: "French (Français)".to_string(), code: "French".to_string() },
+            LanguageChoice { label: "Spanish (Español)".to_string(), code: "Spanish".to_string() },
+            LanguageChoice { label: "Italian (Italiano)".to_string(), code: "Italian".to_string() },
+            LanguageChoice { label: "Portuguese (Português)".to_string(), code: "Portuguese".to_string() },
+            LanguageChoice { label: "Japanese (日本語)".to_string(), code: "Japanese".to_string() },
+            LanguageChoice { label: "Chinese (简体中文)".to_string(), code: "Simplified Chinese".to_string() },
+            LanguageChoice { label: "Custom...".to_string(), code: "custom".to_string() },
+        ]
+    })
 }

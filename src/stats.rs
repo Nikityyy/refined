@@ -9,12 +9,8 @@ pub struct AggregatedStats {
     pub total_refinements: usize,
     pub total_original_words: usize,
     pub total_refined_words: usize,
-    #[allow(dead_code)]
-pub net_word_change: isize,
     pub estimated_minutes_saved: f32,
     pub action_counts: HashMap<String, usize>,
-    #[allow(dead_code)]
-pub model_counts: HashMap<String, usize>,
     pub average_latency_ms: u128,
     pub daily_counts: Vec<(String, usize)>, // last 7 days (e.g. "Mon", count)
 }
@@ -28,14 +24,12 @@ pub fn calculate_stats(history: &[HistoryEntry]) -> AggregatedStats {
     let mut total_ref_words = 0;
     let mut changed_words = 0usize;
     let mut action_counts: HashMap<String, usize> = HashMap::new();
-    let mut model_counts: HashMap<String, usize> = HashMap::new();
     let mut total_duration = 0u128;
 
     for entry in history {
         total_orig_words += entry.stats.original_words;
         total_ref_words += entry.stats.refined_words;
         *action_counts.entry(entry.action_name.clone()).or_insert(0) += 1;
-        *model_counts.entry(entry.model.clone()).or_insert(0) += 1;
         total_duration += entry.duration_ms;
         // Only words the user would have had to re-type by hand count as
         // saved editing time; crediting the whole text volume invents time.
@@ -47,7 +41,6 @@ pub fn calculate_stats(history: &[HistoryEntry]) -> AggregatedStats {
         }
     }
 
-    let net_word_change = total_ref_words as isize - total_orig_words as isize;
     // Hand-retyping the changed portion at ~30 words per minute.
     let estimated_minutes_saved = changed_words as f32 / 30.0;
     let avg_latency = total_duration / history.len() as u128;
@@ -69,10 +62,8 @@ pub fn calculate_stats(history: &[HistoryEntry]) -> AggregatedStats {
         total_refinements: history.len(),
         total_original_words: total_orig_words,
         total_refined_words: total_ref_words,
-        net_word_change,
         estimated_minutes_saved,
         action_counts,
-        model_counts,
         average_latency_ms: avg_latency,
         daily_counts,
     }

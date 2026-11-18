@@ -3,7 +3,9 @@
 use crate::hotkey::TriggerPayload;
 use crate::hud::Hud;
 use crate::store::{Store, ThemeMode};
-use crate::studio::{Studio, StudioTab};
+use crate::studio::Studio;
+#[cfg(feature = "demo")]
+use crate::studio::StudioTab;
 use crate::theme::{self, SpectrumTheme};
 use crate::tray::{self, Tray};
 use eframe::egui::{self, Color32, CornerRadius, Stroke, Ui, ViewportCommand};
@@ -12,6 +14,40 @@ use std::sync::mpsc::Receiver;
 use std::sync::{Arc, Mutex};
 use windows::Win32::Foundation::{CloseHandle, HANDLE, WAIT_OBJECT_0};
 use windows::Win32::System::Threading::{OpenEventW, SetEvent, WaitForSingleObject, INFINITE, SYNCHRONIZATION_SYNCHRONIZE};
+
+/// Demo / capture options. Compiled out of shipped binaries - the fields
+/// and the argument parser only exist in `--features demo` builds.
+#[derive(Default)]
+#[cfg_attr(not(feature = "demo"), allow(dead_code))]
+pub struct DemoOptions {
+    pub active: bool,
+    pub size: Option<[f32; 2]>,
+    pub tab: Option<String>,
+    pub run: Option<String>,
+}
+
+impl DemoOptions {
+    #[cfg(feature = "demo")]
+    pub fn parse() -> Self {
+        Self {
+            active: std::env::args().any(|a| a == "--demo"),
+            size: std::env::args().find_map(|a| {
+                let s = a.strip_prefix("--demo-size=")?;
+                let (w, h) = s.split_once('x')?;
+                Some([w.parse::<f32>().ok()?, h.parse::<f32>().ok()?])
+            }),
+            tab: std::env::args()
+                .find_map(|a| a.strip_prefix("--demo-tab=").map(str::to_string)),
+            run: std::env::args()
+                .find_map(|a| a.strip_prefix("--demo-run=").map(str::to_string)),
+        }
+    }
+
+    #[cfg(not(feature = "demo"))]
+    pub fn none() -> Self {
+        Self::default()
+    }
+}
 
 pub struct RefinedApp {
     pub store: Arc<Mutex<Store>>,
@@ -24,8 +60,13 @@ pub struct RefinedApp {
     pub quitting: Arc<AtomicBool>,
     pub restore_event: HANDLE,
     pub _restore_listener: Option<std::thread::JoinHandle<()>>,
-    pub demo_hud_pending: bool,
-    pub demo_run_action: Option<String>,
+    /// Last visibility state we sent to the viewport; `None` means not yet
+    /// sent. Sending `Visible(true/false)` every frame was pure churn.
+    pub studio_visible_sent: Option<bool>,
+    #[cfg(feature = "demo")]
+    demo_hud_pending: bool,
+    #[cfg(feature = "demo")]
+    demo_run_action: Option<String>,
 }
 
 impl RefinedApp {
@@ -37,9 +78,8 @@ impl RefinedApp {
         restore_event: HANDLE,
         quitting: Arc<AtomicBool>,
         initially_visible: bool,
-        demo_hud: bool,
-        demo_tab: Option<String>,
-        demo_run: Option<String>,
+        #[cfg_attr(not(feature = "demo"), allow(unused_variables))]
+        demo_opts: DemoOptions,
     ) -> Self {
         // Setup Segoe UI system fonts
         theme::setup_custom_fonts(&cc.egui_ctx);
@@ -76,12 +116,20 @@ impl RefinedApp {
             }
         });
 
+        #[cfg(feature = "demo")]
+        let demo_hud_pending =
+            demo_opts.active && (demo_opts.tab.is_none() || demo_opts.run.is_some());
+        #[cfg(feature = "demo")]
+        let demo_run_action = demo_opts.run.clone();
+
         Self {
             store,
             hud: Hud::new(),
             studio: {
+                #[cfg_attr(not(feature = "demo"), allow(unused_mut))]
                 let mut s = Studio::new();
-                if let Some(tab) = demo_tab.as_deref() {
+                #[cfg(feature = "demo")]
+                if let Some(tab) = demo_opts.tab.as_deref() {
                     s.current_tab = match tab {
                         "statistics" => StudioTab::Statistics,
                         "actions" => StudioTab::Actions,
@@ -98,11 +146,11 @@ impl RefinedApp {
             quitting,
             restore_event,
             _restore_listener: Some(restore_listener),
-            // The HUD demo only opens when there is no explicit tab, or when a
-            // live action run asks for it (--demo-run), so --demo-tab captures
-            // show an unoccluded dashboard.
-            demo_hud_pending: demo_hud && (demo_tab.is_none() || demo_run.is_some()),
-            demo_run_action: demo_run,
+            studio_visible_sent: None,
+            #[cfg(feature = "demo")]
+            demo_hud_pending,
+            #[cfg(feature = "demo")]
+            demo_run_action,
         }
     }
 }
@@ -110,6 +158,12 @@ impl RefinedApp {
 impl eframe::App for RefinedApp {
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
         self.quitting.store(true, Ordering::Relaxed);
+        // Quitting can also strand a debounced settings save.
+        if self.studio.take_pending_save() {
+            if let Ok(s) = self.store.lock() {
+                s.save_settings();
+            }
+        }
         unsafe {
             let _ = SetEvent(self.restore_event);
         }
@@ -146,37 +200,40 @@ impl eframe::App for RefinedApp {
         // so the dashboard is fully visible for captures).
         // `--demo-run=<action_id>` triggers that action right away (with a real
         // API key in settings this produces a genuine Processing -> Diff flow).
-        if self.demo_hud_pending {
-            self.demo_hud_pending = false;
-            let sample = "The replacment of human editors with AI is unlikely to happen soon, \
+        #[cfg(feature = "demo")]
+        {
+            if self.demo_hud_pending {
+                self.demo_hud_pending = false;
+                let sample = "The replacment of human editors with AI is unlikely to happen soon, \
 because AI models are unable to distinguishes between facts and convincing-sounding \
 nonsense, which is a very serious problem for publishing.\n";
-            self.hud.open(sample.to_string(), 260, 180, 0);
-            self.hud.demo_sticky = true;
-            self.studio_open.store(true, Ordering::Relaxed);
-            ctx.request_repaint();
-        }
-        if let Some(action) = self.demo_run_action.take() {
-            // Demo-only: allow the API key to be supplied via the environment
-            // (REFINED_DEMO_KEY) so a live run can be driven without ever
-            // persisting a key to disk.
-            let (found, mut config) = {
-                let store_guard = self.store.lock().unwrap();
-                let action = store_guard
-                    .settings
-                    .actions
-                    .iter()
-                    .find(|a| a.id == action)
-                    .cloned();
-                let config = store_guard.settings.groq.clone();
-                (action, config)
-            };
-            if let Ok(k) = std::env::var("REFINED_DEMO_KEY") {
-                k.clone_into(&mut config.api_key);
+                self.hud.open(sample.to_string(), 260, 180, 0);
+                self.hud.demo_sticky = true;
+                self.studio_open.store(true, Ordering::Relaxed);
+                ctx.request_repaint();
             }
-            if let Some(action) = found {
-                let auto = "auto".to_string();
-                self.hud.trigger_action(&action, None, &config, &auto);
+            if let Some(action) = self.demo_run_action.take() {
+                // Demo-only: allow the API key to be supplied via the environment
+                // (REFINED_DEMO_KEY) so a live run can be driven without ever
+                // persisting a key to disk.
+                let (found, mut config) = {
+                    let store_guard = self.store.lock().unwrap();
+                    let action = store_guard
+                        .settings
+                        .actions
+                        .iter()
+                        .find(|a| a.id == action)
+                        .cloned();
+                    let config = store_guard.settings.groq.clone();
+                    (action, config)
+                };
+                if let Ok(k) = std::env::var("REFINED_DEMO_KEY") {
+                    k.clone_into(&mut config.api_key);
+                }
+                if let Some(action) = found {
+                    let auto = "auto".to_string();
+                    self.hud.trigger_action(&action, None, &config, &auto);
+                }
             }
         }
 
@@ -288,7 +345,11 @@ nonsense, which is a very serious problem for publishing.\n";
         // 2. Main Studio Dashboard
         let is_studio_open = self.studio_open.load(Ordering::Relaxed);
         if is_studio_open {
-            ctx.send_viewport_cmd(ViewportCommand::Visible(true));
+            let wants = true;
+            if self.studio_visible_sent != Some(wants) {
+                ctx.send_viewport_cmd(ViewportCommand::Visible(wants));
+                self.studio_visible_sent = Some(wants);
+            }
             egui::Frame::new()
                 .fill(spectrum_theme.background)
                 .inner_margin(egui::Margin::symmetric(16, 12))
@@ -300,7 +361,18 @@ nonsense, which is a very serious problem for publishing.\n";
                     self.studio.update(ui, &mut store_guard, &spectrum_theme);
                 });
         } else {
-            ctx.send_viewport_cmd(ViewportCommand::Visible(false));
+            // Hiding the Studio can strand a debounced settings save that
+            // only Studio::update would have flushed.
+            if self.studio.take_pending_save() {
+                if let Ok(s) = self.store.lock() {
+                    s.save_settings();
+                }
+            }
+            let wants = false;
+            if self.studio_visible_sent != Some(wants) {
+                ctx.send_viewport_cmd(ViewportCommand::Visible(wants));
+                self.studio_visible_sent = Some(wants);
+            }
         }
 
         if let crate::hud::HudState::Processing { .. } = self.hud.state {

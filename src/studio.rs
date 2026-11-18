@@ -1,6 +1,6 @@
 //! Refined Studio: History, Statistics, Action Customization, and Groq Settings.
 
-use crate::actions::{default_actions, ActionItem};
+use crate::actions::ActionItem;
 use crate::autostart;
 use crate::groq::{available_reasoning_efforts, fetch_chat_models, GroqConfig, GroqModel};
 use crate::history::HistoryEntry;
@@ -44,6 +44,14 @@ pub struct Studio {
     pub new_action_prompt: String,
     /// Set from the hotkey thread each frame: Alt+Q failed to register.
     pub hotkey_failed: bool,
+    /// Pending settings save: UI edits mark it, and the next update flushes
+    /// it at most ~half a second later. A write per keystroke or slider tick
+    /// was a full create/flush/rename on the UI thread for nothing.
+    pub settings_save_at: Option<std::time::Instant>,
+    /// Cached aggregate stats keyed by (history length, newest entry id,
+    /// today). Plain recalculation is O(n) with chunk scans and used to run
+    /// every frame while the Statistics tab was open.
+    pub stats_cache: Option<(usize, String, String, crate::stats::AggregatedStats)>,
 }
 
 impl Studio {
@@ -66,6 +74,8 @@ impl Studio {
             new_action_icon: "✨".to_string(),
             new_action_prompt: String::new(),
             hotkey_failed: false,
+            settings_save_at: None,
+            stats_cache: None,
         }
     }
 
@@ -86,7 +96,36 @@ impl Studio {
         });
     }
 
+    /// Marks settings as edited; the next update flushes them after the
+    /// debounce window so a burst of keystrokes or slider ticks becomes
+    /// one atomic write instead of dozens.
+    fn mark_settings_dirty(&mut self) {
+        self.settings_save_at = Some(std::time::Instant::now());
+    }
+
+    /// Flushes a pending settings save if its debounce window has passed.
+    /// Returns whether anything was written.
+    pub fn flush_settings(&mut self, store: &mut Store) -> bool {
+        if let Some(at) = self.settings_save_at {
+            if at.elapsed() >= std::time::Duration::from_millis(400) {
+                store.save_settings();
+                self.settings_save_at = None;
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Takes a pending mark, if any; the caller then persists. Used when the
+    /// Studio hides or the app exits, before the debounce window would have
+    /// elapsed in `update`.
+    pub fn take_pending_save(&mut self) -> bool {
+        self.settings_save_at.take().is_some()
+    }
+
     pub fn update(&mut self, ui: &mut Ui, store: &mut Store, theme: &SpectrumTheme) {
+        self.flush_settings(store);
+
         if let Some(ref rx) = self.models_rx {
             if let Ok(res) = rx.try_recv() {
                 self.is_fetching_models = false;
@@ -114,7 +153,11 @@ impl Studio {
             if pressed(Key::Num1) {
                 self.current_tab = StudioTab::History;
             }
-            if pressed(Key::Num2) {
+            if pressed(Key::Num2) && self.current_tab != StudioTab::Statistics {
+                if self.settings_save_at.is_some() {
+                    store.save_settings();
+                    self.settings_save_at = None;
+                }
                 self.current_tab = StudioTab::Statistics;
             }
             if pressed(Key::Num3) {
@@ -182,7 +225,13 @@ impl Studio {
                     Color32::WHITE,
                 );
                 let resp = resp.on_hover_text(shortcut);
-                if resp.clicked() {
+                if resp.clicked() && self.current_tab != tab {
+                    // Leaving an edit-heavy tab should persist edits at once,
+                    // not after the debounce window.
+                    if self.settings_save_at.is_some() {
+                        store.save_settings();
+                        self.settings_save_at = None;
+                    }
                     self.current_tab = tab;
                 }
             }
@@ -220,11 +269,18 @@ impl Studio {
                     store.clear_history();
                 }
 
-                // Filter by action
+                // Filter by action: built from the live action list plus any
+                // names that only exist in history, so custom and deleted
+                // actions remain filterable.
                 let mut all_actions = vec!["All".to_string()];
-                for a in default_actions() {
-                    if !all_actions.contains(&a.name) {
-                        all_actions.push(a.name);
+                for a in store.settings.actions.iter().map(|a| a.name.clone()) {
+                    if !all_actions.contains(&a) {
+                        all_actions.push(a);
+                    }
+                }
+                for e in store.history.iter().map(|e| e.action_name.clone()) {
+                    if !all_actions.contains(&e) {
+                        all_actions.push(e);
                     }
                 }
                 egui::ComboBox::from_id_salt("history_action_filter")
@@ -407,7 +463,22 @@ impl Studio {
     }
 
     fn render_statistics_tab(&mut self, ui: &mut Ui, store: &Store, theme: &SpectrumTheme) {
-        let stats = calculate_stats(&store.history);
+        let today = chrono::Local::now().format("%Y-%m-%d").to_string();
+        let key = (
+            store.history.len(),
+            store.history.first().map(|e| e.id.clone()).unwrap_or_default(),
+            today,
+        );
+        let stats = match &self.stats_cache {
+            Some((len, id, day, cached)) if *len == key.0 && *id == key.1 && *day == key.2 => {
+                cached.clone()
+            }
+            _ => {
+                let stats = calculate_stats(&store.history);
+                self.stats_cache = Some((key.0, key.1, key.2, stats.clone()));
+                stats
+            }
+        };
 
         ui.label(
             RichText::new("Statistics")
@@ -930,7 +1001,7 @@ impl Studio {
             store.move_action(from, to);
         }
         if save_needed {
-            store.save_settings();
+            self.mark_settings_dirty();
         }
     }
 
@@ -998,7 +1069,7 @@ impl Studio {
                             ui.add_sized([input_w, 28.0], egui::TextEdit::singleline(&mut store.settings.groq.api_key).align(Align2::LEFT_CENTER).password(true))
                         };
                         if edit.changed() {
-                            store.save_settings();
+                            self.mark_settings_dirty();
                         }
 
                         // Fixed 64px width for Show/Hide button to eliminate layout shifts
@@ -1044,6 +1115,7 @@ impl Studio {
                     ui.horizontal(|ui| {
                         ui.label(RichText::new("Active Model:").font(FontId::proportional(12.0)).color(theme.text_primary));
                         let current_model = store.settings.groq.model.clone();
+                        let mut model_picked = false;
 
                         egui::ComboBox::from_id_salt("groq_model_selector")
                             .selected_text(&current_model)
@@ -1057,7 +1129,7 @@ impl Studio {
                                             m.id.clone()
                                         };
                                         if ui.selectable_value(&mut store.settings.groq.model, m.id.clone(), label).clicked() {
-                                            store.save_settings();
+                                            model_picked = true;
                                         }
                                     }
                                 } else {
@@ -1071,11 +1143,14 @@ impl Studio {
                                     ];
                                     for m in defaults {
                                         if ui.selectable_value(&mut store.settings.groq.model, m.to_string(), m).clicked() {
-                                            store.save_settings();
+                                            model_picked = true;
                                         }
                                     }
                                 }
                             });
+                        if model_picked {
+                            self.mark_settings_dirty();
+                        }
                     });
 
                     ui.add_space(8.0);
@@ -1084,6 +1159,7 @@ impl Studio {
                     ui.horizontal(|ui| {
                         ui.label(RichText::new("Reasoning Effort:").font(FontId::proportional(12.0)).color(theme.text_primary));
                         let current_effort = store.settings.groq.reasoning_effort.clone();
+                        let mut effort_picked = false;
 
                         egui::ComboBox::from_id_salt("groq_reasoning_effort")
                             .selected_text(&current_effort)
@@ -1091,10 +1167,13 @@ impl Studio {
                             .show_ui(ui, |ui| {
                                 for effort in available_reasoning_efforts() {
                                     if ui.selectable_value(&mut store.settings.groq.reasoning_effort, effort.to_string(), effort).clicked() {
-                                        store.save_settings();
+                                        effort_picked = true;
                                     }
                                 }
                             });
+                        if effort_picked {
+                            self.mark_settings_dirty();
+                        }
 
                         ui.add_space(10.0);
                         ui.label(
@@ -1115,7 +1194,7 @@ impl Studio {
                             ui.label(RichText::new("Temperature:").font(FontId::proportional(12.0)).color(theme.text_primary));
                             let slider = spectrum_slider(ui, &mut store.settings.groq.temperature, 0.0..=2.0, 0.05, theme);
                             if slider.changed() {
-                                store.save_settings();
+                                self.mark_settings_dirty();
                             }
                             ui.label(
                                 RichText::new(format!("{:.2}", store.settings.groq.temperature))
@@ -1127,7 +1206,7 @@ impl Studio {
                             ui.label(RichText::new("Top-P:").font(FontId::proportional(12.0)).color(theme.text_primary));
                             let slider = spectrum_slider(ui, &mut store.settings.groq.top_p, 0.0..=1.0, 0.05, theme);
                             if slider.changed() {
-                                store.save_settings();
+                                self.mark_settings_dirty();
                             }
                             ui.label(
                                 RichText::new(format!("{:.2}", store.settings.groq.top_p))
@@ -1168,7 +1247,7 @@ impl Studio {
                                 .clicked()
                             {
                                 store.settings.groq.global_system_prompt = GroqConfig::default().global_system_prompt;
-                                store.save_settings();
+                                self.mark_settings_dirty();
                             }
                         });
                     });
@@ -1181,7 +1260,7 @@ impl Studio {
                             .desired_width(f32::INFINITY),
                     );
                     if edit.changed() {
-                        store.save_settings();
+                        self.mark_settings_dirty();
                     }
                 });
 
@@ -1270,7 +1349,7 @@ impl Studio {
 
                         if let Some(mode) = picked {
                             store.settings.theme_mode = mode;
-                            store.save_settings();
+                            self.mark_settings_dirty();
                         }
                     });
 
