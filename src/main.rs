@@ -171,7 +171,8 @@ because AI models are unable to distinguishes between facts and convincing-sound
     // Hotkey listener thread
     let (hotkey_tx, hotkey_rx) = channel();
     let quitting = Arc::new(AtomicBool::new(false));
-    let _hotkey_handle = hotkey::start_hotkey_listener(hotkey_tx, quitting.clone());
+    let hotkey_failed = Arc::new(AtomicBool::new(false));
+    let _hotkey_handle = hotkey::start_hotkey_listener(hotkey_tx, quitting.clone(), hotkey_failed.clone());
 
     // Window options
     let hidden = std::env::args().any(|a| a == "--hidden");
@@ -204,6 +205,7 @@ because AI models are unable to distinguishes between facts and convincing-sound
 
     let store_for_app = store.clone();
     let quitting_for_app = quitting.clone();
+    let hotkey_failed_for_app = hotkey_failed.clone();
     let result = eframe::run_native(
         "Refined",
         options,
@@ -212,6 +214,7 @@ because AI models are unable to distinguishes between facts and convincing-sound
                 cc,
                 store_for_app,
                 hotkey_rx,
+                hotkey_failed_for_app,
                 restore_event,
                 quitting_for_app,
                 !hidden || demo,

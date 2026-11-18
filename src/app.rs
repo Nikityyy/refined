@@ -20,6 +20,7 @@ pub struct RefinedApp {
     pub studio_open: Arc<AtomicBool>,
     pub _tray: Tray,
     pub hotkey_rx: Receiver<TriggerPayload>,
+    pub hotkey_failed: Arc<AtomicBool>,
     pub quitting: Arc<AtomicBool>,
     pub restore_event: HANDLE,
     pub _restore_listener: Option<std::thread::JoinHandle<()>>,
@@ -32,6 +33,7 @@ impl RefinedApp {
         cc: &eframe::CreationContext,
         store: Arc<Mutex<Store>>,
         hotkey_rx: Receiver<TriggerPayload>,
+        hotkey_failed: Arc<AtomicBool>,
         restore_event: HANDLE,
         quitting: Arc<AtomicBool>,
         initially_visible: bool,
@@ -92,6 +94,7 @@ impl RefinedApp {
             studio_open,
             _tray: tray,
             hotkey_rx,
+            hotkey_failed,
             quitting,
             restore_event,
             _restore_listener: Some(restore_listener),
@@ -290,8 +293,10 @@ nonsense, which is a very serious problem for publishing.\n";
                 .fill(spectrum_theme.background)
                 .inner_margin(egui::Margin::symmetric(16, 12))
                 .show(ui, |ui| {
-                    ui.set_min_size(ui.available_size());
+                                    ui.set_min_size(ui.available_size());
                     let mut store_guard = self.store.lock().unwrap();
+                    self.studio.hotkey_failed =
+                        self.hotkey_failed.load(std::sync::atomic::Ordering::Relaxed);
                     self.studio.update(ui, &mut store_guard, &spectrum_theme);
                 });
         } else {

@@ -5,7 +5,7 @@ use crate::groq::GroqConfig;
 use crate::history::HistoryEntry;
 use serde::{Deserialize, Serialize};
 use std::fs::{create_dir_all, File};
-use std::io::BufWriter;
+use std::io::{BufWriter, Write};
 use std::path::PathBuf;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -78,9 +78,20 @@ impl Store {
     }
 
     fn write_json<T: serde::Serialize>(&self, file_name: &str, value: &T) -> Result<(), String> {
-        let file = File::create(self.data_dir.join(file_name)).map_err(|e| e.to_string())?;
-        let writer = BufWriter::new(file);
-        serde_json::to_writer_pretty(writer, value).map_err(|e| e.to_string())
+        // Atomic replace: serialize into a temp file next to the target,
+        // flush it, and only then rename over the real file. A crash or
+        // disk-full mid-write can no longer truncate settings (including
+        // the API key) or the history the next start would then wipe via
+        // `unwrap_or_default()`.
+        let target = self.data_dir.join(file_name);
+        let tmp = self.data_dir.join(format!("{file_name}.tmp"));
+        let file = File::create(&tmp).map_err(|e| e.to_string())?;
+        let mut writer = BufWriter::new(file);
+        serde_json::to_writer_pretty(&mut writer, value).map_err(|e| e.to_string())?;
+        writer.flush().map_err(|e| e.to_string())?;
+        drop(writer);
+        std::fs::rename(&tmp, &target).map_err(|e| e.to_string())?;
+        Ok(())
     }
 
     pub fn save_settings(&self) {

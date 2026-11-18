@@ -79,6 +79,8 @@ struct ChatCompletionRequest {
 #[derive(Deserialize)]
 struct ChatChoice {
     message: ChatChoiceMessage,
+    #[serde(default)]
+    finish_reason: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -319,11 +321,33 @@ pub fn complete_action(
         .read_json()
         .map_err(|e| format!("Failed to parse Groq response: {e}"))?;
 
-    let content = body
-        .choices
-        .into_iter()
-        .find_map(|c| c.message.content)
-        .unwrap_or_default();
+    // A response with no usable content is an error, never a paste: an
+    // empty paste would silently erase the user's selection and still
+    // report success. Same for output cut off mid-sentence by the token
+    // budget - pasting a truncated rewrite reads as complete.
+    let mut content: Option<String> = None;
+    let mut finish_reason: Option<String> = None;
+    for choice in body.choices {
+        if content.is_none() {
+            content = choice.message.content;
+            finish_reason = choice.finish_reason;
+        }
+    }
+    if finish_reason.as_deref() == Some("length") {
+        return Err(
+            "The model ran out of completion tokens and the result was cut short. Raise \"Max completion tokens\" in Settings or pick a shorter action."
+                .to_string(),
+        );
+    }
+    let content = match content {
+        Some(c) if !c.trim().is_empty() => c,
+        _ => {
+            return Err(
+                "The model returned an empty response. Try again or switch models in Settings."
+                    .to_string(),
+            )
+        }
+    };
 
     let (prompt_tokens, completion_tokens) = if let Some(u) = body.usage {
         (u.prompt_tokens, u.completion_tokens)

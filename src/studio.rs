@@ -42,6 +42,8 @@ pub struct Studio {
     pub new_action_desc: String,
     pub new_action_icon: String,
     pub new_action_prompt: String,
+    /// Set from the hotkey thread each frame: Alt+Q failed to register.
+    pub hotkey_failed: bool,
 }
 
 impl Studio {
@@ -63,6 +65,7 @@ impl Studio {
             new_action_desc: String::new(),
             new_action_icon: "✨".to_string(),
             new_action_prompt: String::new(),
+            hotkey_failed: false,
         }
     }
 
@@ -172,9 +175,12 @@ impl Studio {
             }
         });
 
-        ui.add_space(10.0);
+        // Balance the nav band: the panel margin puts 12px above the tab
+        // row, so the separator below gets matching tight spacing instead
+        // of a 32px dead zone before the content heading.
+        ui.add_space(6.0);
         ui.separator();
-        ui.add_space(10.0);
+        ui.add_space(6.0);
 
         match self.current_tab {
             StudioTab::History => self.render_history_tab(ui, store, theme),
@@ -930,6 +936,25 @@ impl Studio {
                     .font(FontId::proportional(12.0))
                     .color(theme.text_secondary),
             );
+
+            // The hotkey thread reports register failure here: a GUI app's
+            // stderr is invisible, and a dead Alt+Q with no signal is
+            // unfixable from the user's side.
+            if self.hotkey_failed {
+                ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                    ui.label(
+                        RichText::new(icons::WARNING)
+                            .font(FontId::proportional(14.0))
+                            .color(theme.diff_del_text),
+                    );
+                    ui.label(
+                        RichText::new("Alt+Q could not be registered - another app may be using it. Refined can still run from the tray.")
+                            .font(FontId::proportional(12.0))
+                            .color(theme.diff_del_text),
+                    );
+                });
+            }
 
             ui.add_space(14.0);
 

@@ -22,7 +22,11 @@ pub struct TriggerPayload {
     pub target_hwnd: isize,
 }
 
-pub fn start_hotkey_listener(sender: Sender<TriggerPayload>, running: Arc<AtomicBool>) -> std::thread::JoinHandle<()> {
+pub fn start_hotkey_listener(
+    sender: Sender<TriggerPayload>,
+    running: Arc<AtomicBool>,
+    failed: Arc<AtomicBool>,
+) -> std::thread::JoinHandle<()> {
     std::thread::spawn(move || unsafe {
         // Register Alt + Q globally
         let ok = RegisterHotKey(
@@ -33,6 +37,9 @@ pub fn start_hotkey_listener(sender: Sender<TriggerPayload>, running: Arc<Atomic
         );
 
         if ok.is_err() {
+            // Surfaced in the Studio Settings tab: a GUI app's eprintln is
+            // invisible, and a dead hotkey with no signal is unfixable.
+            failed.store(true, Ordering::Relaxed);
             eprintln!("Warning: Could not register Alt+Q hotkey (another app may be using it).");
         }
 

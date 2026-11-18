@@ -170,7 +170,10 @@ pub fn capture_selection_with_window() -> Option<CapturedSelection> {
 
     send_copy_with_alt_release();
 
-    // Poll for clipboard sequence change (120ms window for heavy apps like Word / Slack)
+    // Poll for the clipboard sequence change. Heavy applications (big
+    // Word documents, some terminals) take longer than one fast poll
+    // window, so if nothing changed yet, fire a second Ctrl+C and wait a
+    // longer second round instead of giving up silently.
     let start = std::time::Instant::now();
     let mut changed = false;
     while start.elapsed() < Duration::from_millis(120) {
@@ -180,6 +183,17 @@ pub fn capture_selection_with_window() -> Option<CapturedSelection> {
             break;
         }
         sleep(Duration::from_millis(8));
+    }
+    if !changed {
+        send_copy_with_alt_release();
+        while start.elapsed() < Duration::from_millis(300) {
+            let seq = unsafe { GetClipboardSequenceNumber() };
+            if seq != old_seq {
+                changed = true;
+                break;
+            }
+            sleep(Duration::from_millis(16));
+        }
     }
 
     if changed {

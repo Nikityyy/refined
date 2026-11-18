@@ -58,6 +58,9 @@ pub struct Hud {
     pub just_opened: bool,
     /// Demo mode: do not auto-dismiss on focus loss (so the UI can be inspected).
     pub demo_sticky: bool,
+    /// Height the diff view measured for its own content - the window hugs
+    /// the diff instead of leaving dead space below the buttons.
+    pub measured_diff_height: f32,
     /// Generation token: bumped whenever an old run must be invalidated
     /// (HUD re-opened, closed, or a new action triggered). A worker whose
     /// generation is stale must never paste into the user's window.
@@ -123,6 +126,7 @@ impl Hud {
             worker_tx,
             just_opened: false,
             demo_sticky: false,
+            measured_diff_height: 430.0,
             generation: Arc::new(AtomicU64::new(0)),
         }
     }
@@ -160,7 +164,7 @@ impl Hud {
             }
             HudState::RewriteAsInput { .. } => 210.0,
             HudState::Processing { .. } => 150.0,
-            HudState::DiffView { .. } => 430.0,
+            HudState::DiffView { .. } => self.measured_diff_height.clamp(240.0, 430.0),
         }
     }
 
@@ -221,6 +225,16 @@ impl Hud {
                     // started another action while this request was in
                     // flight: never paste, never record history.
                     if generation.load(Ordering::Relaxed) != my_gen {
+                        return;
+                    }
+
+                    // Belt and braces beside the groq.rs check: an empty
+                    // result must never replace the selection.
+                    if resp.text.trim().is_empty() {
+                        let _ = tx.send(HudWorkerMsg::Error(
+                            "The model returned an empty response. Your text was left unchanged."
+                                .to_string(),
+                        ));
                         return;
                     }
 
@@ -292,6 +306,9 @@ impl Hud {
                             model,
                             duration_ms,
                         };
+                        // Start from the full box; the first rendered frame
+                        // re-measures and the window shrinks to its content.
+                        self.measured_diff_height = 430.0;
                         ctx.request_repaint();
                     }
                     HudWorkerMsg::Error(err) => {
@@ -416,8 +433,14 @@ impl Hud {
     ) {
         let ctx = ui.ctx().clone();
 
-        // Global Esc to close HUD
+        // Global Esc to close HUD. Inside the rewrite-as input Esc means
+        // "back to the action list" first (the button row says so); a
+        // second Esc then closes the HUD as everywhere else.
         if ctx.input(|i| i.key_pressed(Key::Escape)) {
+            if matches!(self.state, HudState::RewriteAsInput { .. }) {
+                self.state = HudState::SelectingAction;
+                return;
+            }
             self.close();
             return;
         }
@@ -745,6 +768,15 @@ impl Hud {
                         .color(theme.text_tertiary),
                 );
             }
+        }
+
+        // In the diff view the window hugs its content: measure the used
+        // column height and remember it for the next frame's viewport size,
+        // so short diffs don't sit in a sea of empty space. The panel paints
+        // 12px margins + 1px stroke top and bottom.
+        if matches!(self.state, HudState::DiffView { .. }) && !should_close.get() {
+            let used = ui.min_rect().height() + 26.0;
+            self.measured_diff_height = used.clamp(240.0, 430.0);
         }
 
         if should_close.get() {
