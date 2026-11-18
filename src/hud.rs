@@ -4,9 +4,11 @@ use crate::actions::{standard_languages, ActionItem};
 use crate::diff::{compute_diff, DiffChunk, DiffStats};
 use crate::groq::{complete_action, GroqConfig};
 use crate::history::HistoryEntry;
-use crate::theme::{icons, render_diff_view, spectrum_badge, spectrum_button, SpectrumTheme};
+use crate::theme::{icons, kbd_button, render_diff_view, spectrum_badge, spectrum_button, SpectrumTheme};
 use eframe::egui::{self, Color32, CornerRadius, FontId, Key, Pos2, RichText, Sense, Stroke, Ui};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{channel, Receiver, Sender};
+use std::sync::Arc;
 use windows::Win32::Foundation::{HWND, POINT};
 use windows::Win32::Graphics::Gdi::{
     GetMonitorInfoW, MonitorFromPoint, MONITORINFO, MONITOR_DEFAULTTONEAREST,
@@ -56,6 +58,20 @@ pub struct Hud {
     pub just_opened: bool,
     /// Demo mode: do not auto-dismiss on focus loss (so the UI can be inspected).
     pub demo_sticky: bool,
+    /// Generation token: bumped whenever an old run must be invalidated
+    /// (HUD closed, re-opened, or a new action triggered). A worker whose
+    /// generation is stale must never paste into the user's window.
+    generation: Arc<AtomicU64>,
+}
+
+/// The effective output language for a run: the custom language whenever the
+/// "Custom..." entry is selected, otherwise the selected standard language.
+fn resolved_language<'a>(selected: &'a str, custom: &'a str) -> &'a str {
+    if selected == "custom" {
+        custom
+    } else {
+        selected
+    }
 }
 
 /// Computes multi-monitor clamped HUD position using Win32 monitor coordinates.
@@ -107,6 +123,7 @@ impl Hud {
             worker_tx,
             just_opened: false,
             demo_sticky: false,
+            generation: Arc::new(AtomicU64::new(0)),
         }
     }
 
@@ -119,24 +136,46 @@ impl Hud {
         self.custom_rewrite_input.clear();
         self.error_message = None;
         self.just_opened = true;
-        self.position = compute_clamped_hud_pos(x, y, 480.0, 360.0);
+        // Clamp against the tallest state the HUD can grow into (the diff
+        // view is 430 px); a stale 360 px floor let the last rows of the
+        // diff sit below the work area.
+        self.position = compute_clamped_hud_pos(x, y, 480.0, 430.0);
     }
 
     pub fn close(&mut self) {
         self.is_visible = false;
         self.state = HudState::SelectingAction;
         self.error_message = None;
+        // Invalidate any in-flight worker so its completion is dropped.
+        self.generation.fetch_add(1, Ordering::Relaxed);
     }
 
     pub fn desired_height(&self, action_count: usize) -> f32 {
         match &self.state {
             HudState::SelectingAction => {
                 let items_h = action_count as f32 * 46.0;
-                (80.0 + items_h).clamp(220.0, 460.0)
+                (96.0 + items_h).clamp(220.0, 460.0)
             }
             HudState::RewriteAsInput { .. } => 210.0,
             HudState::Processing { .. } => 150.0,
             HudState::DiffView { .. } => 430.0,
+        }
+    }
+
+    /// Activates the action at `idx`: rewrite-as actions open the custom
+    /// instruction input; everything else is triggered immediately.
+    pub fn activate(
+        &mut self,
+        actions: &[ActionItem],
+        idx: usize,
+        groq_config: &GroqConfig,
+        language: &str,
+    ) {
+        self.selected_index = idx;
+        if actions[idx].is_rewrite_as {
+            self.state = HudState::RewriteAsInput { action_idx: idx };
+        } else {
+            self.trigger_action(&actions[idx], None, groq_config, language);
         }
     }
 
@@ -152,10 +191,16 @@ impl Hud {
         let config = groq_config.clone();
         let lang = language.to_string();
         let tx = self.worker_tx.clone();
+        let generation = self.generation.clone();
 
         let mut instruction = action.prompt_instruction.clone();
         if action.is_rewrite_as {
-            let custom = user_override.unwrap_or("clear and professional").trim();
+            // An empty instruction makes the model guess a style and drift;
+            // treat blank input as the documented default style.
+            let custom = user_override
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .unwrap_or("clear and professional");
             instruction = instruction.replace("{user_instruction}", custom);
         }
 
@@ -164,10 +209,19 @@ impl Hud {
         self.state = HudState::Processing {
             action_name: action_name.clone(),
         };
+        // Invalidate every previously in-flight run; this one owns the HUD.
+        let my_gen = self.generation.fetch_add(1, Ordering::Relaxed) + 1;
 
         std::thread::spawn(move || {
             match complete_action(&config, &instruction, &original, &lang) {
                 Ok(resp) => {
+                    // A newer generation means the user closed the HUD or
+                    // started another action while this request was in
+                    // flight: never paste, never record history.
+                    if generation.load(Ordering::Relaxed) != my_gen {
+                        return;
+                    }
+
                     // 1. Immediately replace selected text in the active application window
                     let hwnd = HWND(target_hwnd as *mut std::ffi::c_void);
                     crate::clipboard::replace_selection_in_target(hwnd, &resp.text);
@@ -187,6 +241,9 @@ impl Hud {
                     });
                 }
                 Err(err) => {
+                    if generation.load(Ordering::Relaxed) != my_gen {
+                        return;
+                    }
                     let _ = tx.send(HudWorkerMsg::Error(err));
                 }
             }
@@ -246,6 +303,72 @@ impl Hud {
                 }
             }
         }
+    }
+
+    /// Renders the action list rows; returns the index of a row that was
+    /// clicked so the caller can activate it.
+    pub fn render_action_list(
+        &mut self,
+        ui: &mut Ui,
+        actions: &[ActionItem],
+        theme: &SpectrumTheme,
+    ) -> Option<usize> {
+        let mut clicked_idx = None;
+        for (idx, action) in actions.iter().enumerate() {
+            let is_selected = idx == self.selected_index;
+            let bg_color = if is_selected {
+                theme.surface_hover
+            } else {
+                Color32::TRANSPARENT
+            };
+
+            let frame = egui::Frame::new()
+                .fill(bg_color)
+                .corner_radius(CornerRadius::same(6))
+                .stroke(if is_selected {
+                    Stroke::new(1.0, theme.accent)
+                } else {
+                    Stroke::NONE
+                })
+                .inner_margin(egui::Margin::symmetric(10, 6));
+
+            let response = frame.show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label(
+                        RichText::new(&action.icon)
+                            .font(FontId::proportional(15.0))
+                            .color(if is_selected { theme.accent } else { theme.text_secondary }),
+                    );
+                    ui.add_space(4.0);
+                    ui.vertical(|ui| {
+                        ui.label(
+                            RichText::new(&action.name)
+                                .font(FontId::proportional(13.0))
+                                .color(theme.text_primary)
+                                .strong(),
+                        );
+                        ui.label(
+                            RichText::new(&action.description)
+                                .font(FontId::proportional(12.0))
+                                .color(theme.text_secondary),
+                        );
+                    });
+
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if !action.shortcut.is_empty() {
+                            spectrum_badge(ui, &action.shortcut, theme.surface_elevated, theme.text_secondary);
+                        }
+                    });
+                });
+            });
+
+            let rect = response.response.rect;
+            let interact = ui.interact(rect, ui.scope_id().with(idx), Sense::click());
+            if interact.clicked() {
+                clicked_idx = Some(idx);
+            }
+        }
+        clicked_idx
     }
 
     pub fn render_ui(
@@ -358,93 +481,35 @@ impl Hud {
                     };
                     if let Some(k) = key_opt {
                         if ctx.input(|i| i.key_pressed(k)) {
-                            self.selected_index = idx;
-                            if action.is_rewrite_as {
-                                self.state = HudState::RewriteAsInput { action_idx: idx };
-                            } else {
-                                let lang = if *selected_language == "custom" { custom_language.as_str() } else { selected_language.as_str() };
-                                self.trigger_action(action, None, groq_config, lang);
-                            }
+                            let lang = resolved_language(selected_language, custom_language);
+                            self.activate(actions, idx, groq_config, lang);
                             return;
                         }
                     }
                 }
 
                 if ctx.input(|i| i.key_pressed(Key::Enter)) {
-                    let action = &actions[self.selected_index];
-                    if action.is_rewrite_as {
-                        self.state = HudState::RewriteAsInput { action_idx: self.selected_index };
-                    } else {
-                        let lang = if *selected_language == "custom" { custom_language.as_str() } else { selected_language.as_str() };
-                        self.trigger_action(action, None, groq_config, lang);
-                    }
+                    let lang = resolved_language(selected_language, custom_language);
+                    self.activate(actions, self.selected_index, groq_config, lang);
                     return;
                 }
 
-                // Render action items list
-                for (idx, action) in actions.iter().enumerate() {
-                    let is_selected = idx == self.selected_index;
-                    let bg_color = if is_selected {
-                        theme.surface_hover
-                    } else {
-                        Color32::TRANSPARENT
-                    };
-
-                    let frame = egui::Frame::new()
-                        .fill(bg_color)
-                        .corner_radius(CornerRadius::same(6))
-                        .stroke(if is_selected {
-                            Stroke::new(1.0, theme.accent)
-                        } else {
-                            Stroke::NONE
-                        })
-                        .inner_margin(egui::Margin::symmetric(10, 6));
-
-                    let response = frame.show(ui, |ui| {
-                        ui.horizontal(|ui| {
-                            ui.label(
-                                RichText::new(&action.icon)
-                                    .font(FontId::proportional(15.0))
-                                    .color(if is_selected { theme.accent } else { theme.text_secondary }),
-                            );
-                            ui.add_space(4.0);
-                            ui.vertical(|ui| {
-                                ui.label(
-                                    RichText::new(&action.name)
-                                        .font(FontId::proportional(13.0))
-                                        .color(theme.text_primary)
-                                        .strong(),
-                                );
-                                ui.label(
-                                    RichText::new(&action.description)
-                                        .font(FontId::proportional(12.0))
-                                        .color(theme.text_secondary),
-                                );
-                            });
-
-                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                if !action.shortcut.is_empty() {
-                                    spectrum_badge(ui, &action.shortcut, theme.surface_elevated, theme.text_secondary);
-                                }
-                            });
-                        });
-                    });
-
-                    let rect = response.response.rect;
-                    let interact = ui.interact(rect, ui.scope_id().with(idx), Sense::click());
-                    if interact.clicked() {
-                        self.selected_index = idx;
-                        if action.is_rewrite_as {
-                            self.state = HudState::RewriteAsInput { action_idx: idx };
-                        } else {
-                            let lang = if *selected_language == "custom" { custom_language.as_str() } else { selected_language.as_str() };
-                            self.trigger_action(action, None, groq_config, lang);
+                // Render action items list in a scrollable container so
+                // every row stays reachable even with many custom actions.
+                egui::ScrollArea::vertical()
+                    .max_height(340.0)
+                    .auto_shrink([false, true])
+                    .show(ui, |ui| {
+                        ui.set_width(ui.available_width());
+                        if let Some(idx) = self.render_action_list(ui, actions, theme) {
+                            let lang = resolved_language(selected_language, custom_language);
+                            self.activate(actions, idx, groq_config, lang);
                         }
-                    }
-                }
+                    });
             }
             HudState::RewriteAsInput { action_idx } => {
                 let action = &actions[*action_idx];
+                let lang = resolved_language(selected_language, custom_language);
                 ui.label(
                     RichText::new(format!("{} {}", icons::EDIT, action.name))
                         .font(FontId::proportional(13.0))
@@ -465,23 +530,23 @@ impl Hud {
                 );
                 edit.request_focus();
 
-                if edit.lost_focus() && ctx.input(|i| i.key_pressed(Key::Enter)) {
-                    let input = self.custom_rewrite_input.clone();
-                    let lang = if *selected_language == "custom" { custom_language.as_str() } else { selected_language.as_str() };
-                    self.trigger_action(action, Some(&input), groq_config, lang);
-                }
+                let mut submitted =
+                    edit.lost_focus() && ctx.input(|i| i.key_pressed(Key::Enter));
 
                 ui.add_space(8.0);
                 ui.horizontal(|ui| {
                     if spectrum_button(ui, "Rewrite [Enter]", true, theme).clicked() {
-                        let input = self.custom_rewrite_input.clone();
-                        let lang = if *selected_language == "custom" { custom_language.as_str() } else { selected_language.as_str() };
-                        self.trigger_action(action, Some(&input), groq_config, lang);
+                        submitted = true;
                     }
                     if spectrum_button(ui, "Cancel [Esc]", false, theme).clicked() {
                         self.state = HudState::SelectingAction;
                     }
                 });
+
+                if submitted {
+                    let input = self.custom_rewrite_input.clone();
+                    self.trigger_action(action, Some(&input), groq_config, lang);
+                }
             }
             HudState::Processing { action_name } => {
                 ui.vertical_centered(|ui| {
@@ -544,21 +609,14 @@ impl Hud {
                     });
                 });
 
-                let delta = stats.word_delta();
                 let changed = diff_chunks
                     .iter()
                     .filter(|c| !matches!(c.kind, crate::diff::DiffKind::Equal))
                     .count();
-                let change_str = if delta == 0 {
-                    format!("{changed} word change{}", if changed == 1 { "" } else { "s" })
-                } else if delta > 0 {
-                    format!("{changed} changes, +{delta} words")
-                } else {
-                    format!("{changed} changes, {delta} words")
-                };
+                let change_word = if changed == 1 { "change" } else { "changes" };
                 ui.label(
                     RichText::new(format!(
-                        "{change_str} · replaced in your text — {} → {} words",
+                        "{changed} {change_word} · replaced in your text — {} → {} words",
                         stats.original_words, stats.refined_words
                     ))
                     .font(FontId::proportional(12.0))
@@ -576,42 +634,23 @@ impl Hud {
                             .corner_radius(CornerRadius::same(8))
                             .inner_margin(egui::Margin::same(12))
                             .show(ui, |ui| {
+                                // A fixed width makes the single-flow diff
+                                // wrap like a text document, not a column.
+                                ui.set_width(ui.available_width());
                                 render_diff_view(ui, diff_chunks, theme);
                             });
                     });
 
                 ui.add_space(10.0);
                 ui.horizontal(|ui| {
-                    if ui
-                        .add_sized(
-                            [118.0, 28.0],
-                            egui::Button::new(
-                                RichText::new(format!("{} Copy  Ctrl+C", icons::COPY))
-                                    .font(FontId::proportional(12.0))
-                                    .color(theme.text_primary),
-                            )
-                            .fill(theme.surface_elevated)
-                            .stroke(Stroke::new(1.0, theme.border))
-                            .corner_radius(CornerRadius::same(6)),
-                        )
+                    if kbd_button(ui, &format!("{} Copy", icons::COPY), "Ctrl+C", false, 118.0, theme)
                         .clicked()
                         || (ctx.input(|i| i.modifiers.command && i.key_pressed(Key::C)))
                     {
                         crate::clipboard::set_clipboard_text(refined_text);
                     }
 
-                    if ui
-                        .add_sized(
-                            [118.0, 28.0],
-                            egui::Button::new(
-                                RichText::new("Undo  Ctrl+Z")
-                                    .font(FontId::proportional(12.0))
-                                    .color(theme.text_primary),
-                            )
-                            .fill(theme.surface_elevated)
-                            .stroke(Stroke::new(1.0, theme.border))
-                            .corner_radius(CornerRadius::same(6)),
-                        )
+                    if kbd_button(ui, "Undo", "Ctrl+Z", false, 118.0, theme)
                         .clicked()
                         || (ctx.input(|i| i.modifiers.command && i.key_pressed(Key::Z)))
                     {
@@ -620,21 +659,7 @@ impl Hud {
                     }
 
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui
-                            .add_sized(
-                                [96.0, 28.0],
-                                egui::Button::new(
-                                    RichText::new("Done  Esc")
-                                        .font(FontId::proportional(12.0))
-                                        .color(Color32::WHITE)
-                                        .strong(),
-                                )
-                                .fill(theme.accent)
-                                .stroke(Stroke::NONE)
-                                .corner_radius(CornerRadius::same(6)),
-                            )
-                            .clicked()
-                        {
+                        if kbd_button(ui, "Done", "Esc", true, 118.0, theme).clicked() {
                             should_close.set(true);
                         }
                     });

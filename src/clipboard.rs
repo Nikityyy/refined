@@ -144,12 +144,6 @@ pub fn send_copy_with_alt_release() {
     }
 }
 
-/// Sends Ctrl+C to copy whatever is currently selected in the active app.
-#[allow(dead_code)]
-pub fn send_copy() {
-    send_copy_with_alt_release();
-}
-
 /// Sends Ctrl+V into the active window.
 pub fn send_paste() {
     let inputs = [
@@ -204,12 +198,6 @@ pub fn capture_selection_with_window() -> Option<CapturedSelection> {
     None
 }
 
-/// Captures selected text from the currently active application.
-#[allow(dead_code)]
-pub fn capture_selection() -> Option<String> {
-    capture_selection_with_window().map(|c| c.text)
-}
-
 /// Replaces text in target window: restores target window focus, normalizes CRLF,
 /// pastes via Ctrl+V.
 pub fn replace_selection_in_target(target_hwnd: HWND, new_text: &str) -> bool {
@@ -245,11 +233,4 @@ pub fn replace_selection_in_target(target_hwnd: HWND, new_text: &str) -> bool {
     sleep(Duration::from_millis(25));
     send_paste();
     true
-}
-
-/// Replaces the selected text in the active application with new_text.
-#[allow(dead_code)]
-pub fn replace_selection(new_text: &str) -> bool {
-    let target_hwnd = unsafe { GetForegroundWindow() };
-    replace_selection_in_target(target_hwnd, new_text)
 }

@@ -49,7 +49,6 @@ impl RefinedApp {
         // reflects the current schema after an app update.
         {
             let store = store.lock().unwrap();
-            let _ = std::fs::create_dir_all(crate::store::data_dir());
             store.save_settings();
         }
 

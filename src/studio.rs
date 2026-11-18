@@ -6,7 +6,7 @@ use crate::groq::{available_reasoning_efforts, fetch_chat_models, GroqConfig, Gr
 use crate::history::HistoryEntry;
 use crate::stats::calculate_stats;
 use crate::store::{Store, ThemeMode};
-use crate::theme::{icons, render_diff_view, render_rf_logo, spectrum_badge, spectrum_button, spectrum_switch, SpectrumTheme};
+use crate::theme::{card_frame, icons, render_diff_view, render_rf_logo, spectrum_badge, spectrum_button, spectrum_switch, SpectrumTheme};
 use eframe::egui::{
     self, Align, Align2, Color32, CornerRadius, FontId, Key, Layout, RichText, ScrollArea, Sense, Stroke, Ui, Vec2,
 };
@@ -250,10 +250,10 @@ impl Studio {
         let search = self.history_search.to_lowercase();
         let action_filter = self.history_action_filter.clone();
 
+        // store.history is newest-first; display it in that order.
         let filtered: Vec<&HistoryEntry> = store
             .history
             .iter()
-            .rev()
             .filter(|e| {
                 if action_filter != "All" && e.action_name != action_filter {
                     return false;
@@ -287,11 +287,7 @@ impl Studio {
                 for entry in filtered {
                     let is_expanded = self.expanded_history_id.as_deref() == Some(&entry.id);
 
-                    egui::Frame::new()
-                        .fill(theme.surface)
-                        .stroke(Stroke::new(1.0, theme.border))
-                        .corner_radius(CornerRadius::same(8))
-                        .inner_margin(egui::Margin::same(12))
+                    card_frame(theme, egui::Margin::same(12))
                         .show(ui, |ui| {
                             ui.set_width(ui.available_width());
 
@@ -305,15 +301,17 @@ impl Studio {
                                 );
 
                                 let delta = entry.stats.word_delta();
-                                let delta_str = if delta >= 0 {
-                                    format!("+{delta}")
-                                } else {
-                                    format!("{delta}")
+                                // Zero-delta entries read cleaner without
+                                // an empty "(+0)" badge.
+                                let delta_str = match delta {
+                                    0 => String::new(),
+                                    d if d > 0 => format!(" (+{d})"),
+                                    d => format!(" ({d})"),
                                 };
                                 spectrum_badge(
                                     ui,
                                     // Clean right arrow → (no mojibake)
-                                    &format!("{} → {} words ({})", entry.stats.original_words, entry.stats.refined_words, delta_str),
+                                    &format!("{} → {} words{}", entry.stats.original_words, entry.stats.refined_words, delta_str),
                                     theme.surface_elevated,
                                     theme.text_secondary,
                                 );
@@ -409,8 +407,10 @@ impl Studio {
         let available_w = ui.available_width();
         let gap = 12.0;
         let min_card_w = 182.0;
+        let side_margin = 28.0; // inner_margin(14) * 2, painted outside set_width
         let per_row = if available_w >= min_card_w * 4.0 + gap * 3.0 { 4 } else { 2 };
-        let card_w = ((available_w - gap * (per_row as f32 - 1.0)) / per_row as f32)
+        let card_w = ((available_w - gap * (per_row as f32 - 1.0) - side_margin * per_row as f32)
+            / per_row as f32)
             .floor()
             .max(min_card_w);
 
@@ -428,9 +428,9 @@ impl Studio {
                 theme.purple,
             ),
             (
-                "TIME SAVED",
+                "EDIT TIME SAVED",
                 format!("{:.1} min", stats.estimated_minutes_saved),
-                "editing effort avoided".to_string(),
+                "manual rework avoided".to_string(),
                 Color32::from_rgb(0x22, 0xC5, 0x5E),
             ),
             (
@@ -461,30 +461,29 @@ impl Studio {
 
         // 2. Two-Column Dashboard: Real Activity Bar Chart (Left) + Action Breakdown (Right)
         let col_gap = 16.0;
-        let left_w = (available_w - col_gap) * 0.58;
-        let right_w = (available_w - col_gap) * 0.42;
+        // The frames paint inner_margin(16) on each side (64 px across the
+        // two panels); subtract it or the right panel gets pushed off-screen.
+        let frame_margins = 64.0;
+        let left_w = (available_w - col_gap - frame_margins) * 0.58;
+        let right_w = (available_w - col_gap - frame_margins) * 0.42;
 
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing = Vec2::new(col_gap, 0.0);
 
             // Left Column: Interactive 7-Day Activity Chart
-            egui::Frame::new()
-                .fill(theme.surface)
-                .stroke(Stroke::new(1.0, theme.border))
-                .corner_radius(CornerRadius::same(8))
-                .inner_margin(egui::Margin::same(16))
+            card_frame(theme, egui::Margin::same(16))
                 .show(ui, |ui| {
                     ui.set_width(left_w);
                     ui.set_height(240.0);
 
                     ui.label(
-                        RichText::new("Weekly Activity Velocity")
+                        RichText::new("Refinements per day")
                             .font(FontId::proportional(14.0))
                             .color(theme.text_primary)
                             .strong(),
                     );
                     ui.label(
-                        RichText::new("Daily operations and word volume processed")
+                        RichText::new("How many refinements you ran each day")
                             .font(FontId::proportional(12.0))
                             .color(theme.text_secondary),
                     );
@@ -505,7 +504,7 @@ impl Studio {
                         let max_count = stats.daily_counts.iter().map(|(_, c)| *c).max().unwrap_or(1).max(1) as f32;
 
                         ui.horizontal(|ui| {
-                            let bar_slot_w = (left_w - 32.0) / 7.0;
+                            let bar_slot_w = left_w / 7.0;
                             ui.spacing_mut().item_spacing = Vec2::new(0.0, 0.0);
 
                             for (day, count) in &stats.daily_counts {
@@ -560,11 +559,7 @@ impl Studio {
                 });
 
             // Right Column: Action Usage Distribution
-            egui::Frame::new()
-                .fill(theme.surface)
-                .stroke(Stroke::new(1.0, theme.border))
-                .corner_radius(CornerRadius::same(8))
-                .inner_margin(egui::Margin::same(16))
+            card_frame(theme, egui::Margin::same(16))
                 .show(ui, |ui| {
                     ui.set_width(right_w);
                     ui.set_height(240.0);
@@ -576,7 +571,7 @@ impl Studio {
                             .strong(),
                     );
                     ui.label(
-                        RichText::new("Breakdown of study and writing tools used")
+                        RichText::new("How often each action was used")
                             .font(FontId::proportional(12.0))
                             .color(theme.text_secondary),
                     );
@@ -735,11 +730,7 @@ impl Studio {
 
                 let actions = &mut store.settings.actions;
                 for action in actions.iter_mut() {
-                    egui::Frame::new()
-                        .fill(theme.surface)
-                        .stroke(Stroke::new(1.0, theme.border))
-                        .corner_radius(CornerRadius::same(8))
-                        .inner_margin(egui::Margin::same(14))
+                    card_frame(theme, egui::Margin::same(14))
                         .show(ui, |ui| {
                             ui.set_width(ui.available_width());
 
@@ -837,11 +828,7 @@ impl Studio {
             ui.add_space(14.0);
 
             // Groq API Key Card
-            egui::Frame::new()
-                .fill(theme.surface)
-                .stroke(Stroke::new(1.0, theme.border))
-                .corner_radius(CornerRadius::same(8))
-                .inner_margin(egui::Margin::same(16))
+            card_frame(theme, egui::Margin::same(16))
                 .show(ui, |ui| {
                     ui.set_width(ui.available_width());
 
@@ -893,11 +880,7 @@ impl Studio {
             ui.add_space(14.0);
 
             // Model & Reasoning Settings Card
-            egui::Frame::new()
-                .fill(theme.surface)
-                .stroke(Stroke::new(1.0, theme.border))
-                .corner_radius(CornerRadius::same(8))
-                .inner_margin(egui::Margin::same(16))
+            card_frame(theme, egui::Margin::same(16))
                 .show(ui, |ui| {
                     ui.set_width(ui.available_width());
 
@@ -1008,11 +991,7 @@ impl Studio {
             ui.add_space(14.0);
 
             // Global System Prompt Card
-            egui::Frame::new()
-                .fill(theme.surface)
-                .stroke(Stroke::new(1.0, theme.border))
-                .corner_radius(CornerRadius::same(8))
-                .inner_margin(egui::Margin::same(16))
+            card_frame(theme, egui::Margin::same(16))
                 .show(ui, |ui| {
                     ui.set_width(ui.available_width());
 
@@ -1046,11 +1025,7 @@ impl Studio {
             ui.add_space(14.0);
 
             // Appearance & Platform Card
-            egui::Frame::new()
-                .fill(theme.surface)
-                .stroke(Stroke::new(1.0, theme.border))
-                .corner_radius(CornerRadius::same(8))
-                .inner_margin(egui::Margin::same(16))
+            card_frame(theme, egui::Margin::same(16))
                 .show(ui, |ui| {
                     ui.set_width(ui.available_width());
 
@@ -1067,11 +1042,29 @@ impl Studio {
                         ui.label(RichText::new("Theme:").font(FontId::proportional(12.0)).color(theme.text_primary));
                         let is_dark = theme.is_dark;
 
-                        if ui.selectable_label(is_dark, "Dark Mode").clicked() {
+                        // The active label sits on the accent pill; it must
+                        // stay white or it is unreadable in both themes.
+                        if ui
+                            .selectable_label(
+                                is_dark,
+                                RichText::new("Dark Mode")
+                                    .color(if is_dark { Color32::WHITE } else { theme.text_secondary })
+                                    .strong(),
+                            )
+                            .clicked()
+                        {
                             store.settings.theme_mode = ThemeMode::Dark;
                             store.save_settings();
                         }
-                        if ui.selectable_label(!is_dark, "Light Mode").clicked() {
+                        if ui
+                            .selectable_label(
+                                !is_dark,
+                                RichText::new("Light Mode")
+                                    .color(if !is_dark { Color32::WHITE } else { theme.text_secondary })
+                                    .strong(),
+                            )
+                            .clicked()
+                        {
                             store.settings.theme_mode = ThemeMode::Light;
                             store.save_settings();
                         }
@@ -1084,8 +1077,6 @@ impl Studio {
                         let mut autostart_val = autostart::enabled();
                         if spectrum_switch(ui, &mut autostart_val, theme).changed() {
                             autostart::set(autostart_val);
-                            store.settings.autostart = autostart_val;
-                            store.save_settings();
                         }
                         ui.add_space(8.0);
                         ui.label(RichText::new("Start Refined automatically with Windows").color(theme.text_primary));
@@ -1136,11 +1127,7 @@ fn render_metric_card(
     card_width: f32,
     theme: &SpectrumTheme,
 ) {
-    egui::Frame::new()
-        .fill(theme.surface)
-        .stroke(Stroke::new(1.0, theme.border))
-        .corner_radius(CornerRadius::same(8))
-        .inner_margin(egui::Margin::symmetric(14, 12))
+    card_frame(theme, egui::Margin::symmetric(14, 12))
         .show(ui, |ui| {
             ui.set_width(card_width);
             ui.set_min_height(72.0);

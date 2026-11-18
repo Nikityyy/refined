@@ -26,6 +26,7 @@ pub fn calculate_stats(history: &[HistoryEntry]) -> AggregatedStats {
 
     let mut total_orig_words = 0;
     let mut total_ref_words = 0;
+    let mut changed_words = 0usize;
     let mut action_counts: HashMap<String, usize> = HashMap::new();
     let mut model_counts: HashMap<String, usize> = HashMap::new();
     let mut total_duration = 0u128;
@@ -36,11 +37,18 @@ pub fn calculate_stats(history: &[HistoryEntry]) -> AggregatedStats {
         *action_counts.entry(entry.action_name.clone()).or_insert(0) += 1;
         *model_counts.entry(entry.model.clone()).or_insert(0) += 1;
         total_duration += entry.duration_ms;
+        // Only words the user would have had to re-type by hand count as
+        // saved editing time; crediting the whole text volume invents time.
+        for chunk in &entry.diff_chunks {
+            if chunk.kind != crate::diff::DiffKind::Equal {
+                changed_words += chunk.text.split_whitespace().count();
+            }
+        }
     }
 
     let net_word_change = total_ref_words as isize - total_orig_words as isize;
-    // Human rewriting/polishing average: ~30 words per minute
-    let estimated_minutes_saved = (total_orig_words as f32 / 30.0).max(0.1);
+    // Hand-retyping the changed portion at ~30 words per minute.
+    let estimated_minutes_saved = changed_words as f32 / 30.0;
     let avg_latency = total_duration / history.len() as u128;
 
     // Daily counts for the last 7 days

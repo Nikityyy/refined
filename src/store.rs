@@ -28,7 +28,6 @@ pub struct AppSettings {
     pub selected_language: String,
     pub custom_language: String,
     pub theme_mode: ThemeMode,
-    pub autostart: bool,
     pub history_limit: usize,
 }
 
@@ -40,7 +39,6 @@ impl Default for AppSettings {
             selected_language: "auto".to_string(),
             custom_language: String::new(),
             theme_mode: ThemeMode::Dark,
-            autostart: false,
             history_limit: 500,
         }
     }
@@ -52,10 +50,6 @@ pub struct Store {
     data_dir: PathBuf,
 }
 
-/// Returns the app data directory used by the store.
-pub fn data_dir() -> PathBuf {
-    dirs_fallback_app_data()
-}
 
 impl Store {
     pub fn open() -> Self {
@@ -83,19 +77,23 @@ impl Store {
         }
     }
 
+    fn write_json<T: serde::Serialize>(&self, file_name: &str, value: &T) -> Result<(), String> {
+        let file = File::create(self.data_dir.join(file_name)).map_err(|e| e.to_string())?;
+        let writer = BufWriter::new(file);
+        serde_json::to_writer_pretty(writer, value).map_err(|e| e.to_string())
+    }
+
     pub fn save_settings(&self) {
-        let file_path = self.data_dir.join("settings.json");
-        if let Ok(file) = File::create(file_path) {
-            let writer = BufWriter::new(file);
-            let _ = serde_json::to_writer_pretty(writer, &self.settings);
+        if let Err(e) = self.write_json("settings.json", &self.settings) {
+            // Disk-full or permission failures must not disappear silently
+            // while the UI implies everything was saved.
+            eprintln!("[refined] could not save settings: {e}");
         }
     }
 
     pub fn save_history(&self) {
-        let file_path = self.data_dir.join("history.json");
-        if let Ok(file) = File::create(file_path) {
-            let writer = BufWriter::new(file);
-            let _ = serde_json::to_writer_pretty(writer, &self.history);
+        if let Err(e) = self.write_json("history.json", &self.history) {
+            eprintln!("[refined] could not save history: {e}");
         }
     }
 

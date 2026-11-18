@@ -24,7 +24,7 @@ impl Default for GroqConfig {
             temperature: 1.0,
             top_p: 1.0,
             max_completion_tokens: 32768,
-            global_system_prompt: "You are Refined, a precision writing and editing assistant. Your task is to transform the provided text according to the requested action with utmost clarity, elegance, and stylistic excellence. Preserve the original structural formatting (paragraphs, line breaks, indentation, bullet points, numbering, and capitalization style). Return ONLY the refined text directly with no greeting, explanation, surrounding quotes, or commentary.".to_string(),
+            global_system_prompt: "You are Refined, a precision writing and editing assistant. Your task is to transform the provided text according to the requested action with utmost clarity, elegance, and stylistic excellence. Preserve the original structural formatting (paragraphs, line breaks, indentation, bullet points, numbering, and capitalization style). Output standard ASCII punctuation only; never substitute Unicode lookalikes such as non-breaking hyphens or zero-width spaces. Return ONLY the refined text directly with no greeting, explanation, surrounding quotes, or commentary.".to_string(),
         }
     }
 }
@@ -99,10 +99,51 @@ struct ChatCompletionResponse {
     usage: Option<ChatUsage>,
 }
 
-/// Cleans raw completion output without destroying indentation or list structure.
-pub fn clean_generated_text(raw: &str) -> String {
-    // Strip leading and trailing newlines only, preserving inline/block indentation
-    raw.trim_matches(|c| c == '\r' || c == '\n').to_string()
+/// Upper bound for any single Groq HTTP call. ureq has no default timeout,
+/// so without this a hung connection would freeze the HUD in Processing
+/// forever (and the 400-fallback ladder would multiply the wait).
+const HTTP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(45);
+
+/// Shared HTTP agent with the overall call timeout configured, so a hung
+/// TLS/HTTP connection surfaces as an error instead of a frozen HUD.
+fn http_agent() -> &'static ureq::Agent {
+    static AGENT: std::sync::OnceLock<ureq::Agent> = std::sync::OnceLock::new();
+    AGENT.get_or_init(|| {
+        ureq::Agent::config_builder()
+            .timeout_per_call(Some(HTTP_TIMEOUT))
+            .build()
+            .new_agent()
+    })
+}
+
+/// Cleans raw completion output for pasting into the user's document.
+///
+/// - Strips only the newlines the model wrapped its answer in, then restores
+///   the newline run the ORIGINAL selection ended with; dropping it would
+///   merge two paragraphs on paste (the diff would show a phantom Delete).
+/// - Maps U+2011 (non-breaking hyphen) and removes zero-width characters,
+///   which otherwise land verbatim in the document and silently break
+///   search, spellcheck, and hyphenation.
+pub fn clean_generated_text(raw: &str, original: &str) -> String {
+    let mut out: String = raw
+        .trim_matches(|c| c == '\r' || c == '\n')
+        .chars()
+        .map(|c| if c == '\u{2011}' { '-' } else { c })
+        .filter(|c| *c != '\u{200B}' && *c != '\u{FEFF}')
+        .collect();
+
+    let orig_tail: String = original
+        .chars()
+        .rev()
+        .take_while(|c| *c == '\n' || *c == '\r')
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect();
+    if !orig_tail.is_empty() && !out.ends_with('\n') && !out.ends_with('\r') {
+        out.push_str(&orig_tail);
+    }
+    out
 }
 
 /// Fetches models list from Groq API and filters to chat models only.
@@ -113,7 +154,8 @@ pub fn fetch_chat_models(api_key: &str) -> Result<Vec<GroqModel>, String> {
     }
 
     let url = "https://api.groq.com/openai/v1/models";
-    let resp = ureq::get(url)
+    let resp = http_agent()
+        .get(url)
         .header("Authorization", &format!("Bearer {key}"))
         .call()
         .map_err(|e| format!("Failed to reach Groq API: {e}"))?;
@@ -240,7 +282,8 @@ pub fn complete_action(
         req_body.reasoning_effort = effort;
         req_body.max_completion_tokens = tokens;
 
-        match ureq::post(url)
+        match http_agent()
+            .post(url)
             .header("Authorization", &format!("Bearer {key}"))
             .header("Content-Type", "application/json")
             .send_json(&req_body)
@@ -286,7 +329,7 @@ pub fn complete_action(
     };
 
     Ok(CompletionResponse {
-        text: clean_generated_text(&content),
+        text: clean_generated_text(&content, user_text),
         duration_ms,
         model: config.model.clone(),
         prompt_tokens,

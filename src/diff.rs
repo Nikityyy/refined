@@ -99,57 +99,118 @@ fn tokenize(s: &str) -> Vec<&str> {
     tokens
 }
 
+/// The LCS table is allocated as (n+1) x (m+1) u32 cells. A plain DP over a
+/// large selection would need ~4 bytes per cell (a 100 KB selection would
+/// try to reserve over a gigabyte, killing the app under `panic = "abort"`).
+/// Solved in three steps: common prefix/suffix tokens are matched directly,
+/// the LCS runs only over the changed middle part, and if that middle is
+/// still too large it falls back to a wholesale delete+insert chunk pair,
+/// which is a valid (just coarser) diff. MAX_LCS_CELLS keeps the DP at
+/// a few hundred MB worst case — fine relative to typical documents —
+/// while bounding memory deterministically.
+const MAX_LCS_CELLS: usize = 256 * 1024 * 1024 / 4; // 256 MB worth of u32 cells
+
 /// Computes word-level diff between `original` and `refined`.
 pub fn compute_diff(original: &str, refined: &str) -> (Vec<DiffChunk>, DiffStats) {
     let orig_tokens = tokenize(original);
     let ref_tokens = tokenize(refined);
 
-    let n = orig_tokens.len();
-    let m = ref_tokens.len();
+    // 1. Match the common prefix and suffix directly; the DP only has to
+    //    explain the changed middle.
+    let mut start = 0;
+    while start < orig_tokens.len()
+        && start < ref_tokens.len()
+        && orig_tokens[start] == ref_tokens[start]
+    {
+        start += 1;
+    }
+    let mut end_o = orig_tokens.len();
+    let mut end_r = ref_tokens.len();
+    while end_o > start && end_r > start && orig_tokens[end_o - 1] == ref_tokens[end_r - 1] {
+        end_o -= 1;
+        end_r -= 1;
+    }
 
-    // Standard LCS table
-    let mut dp = vec![vec![0u32; m + 1]; n + 1];
-    for i in 0..n {
-        for j in 0..m {
-            if orig_tokens[i] == ref_tokens[j] {
-                dp[i + 1][j + 1] = dp[i][j] + 1;
-            } else {
-                dp[i + 1][j + 1] = dp[i + 1][j].max(dp[i][j + 1]);
+    let mut chunks: Vec<DiffChunk> = Vec::new();
+    if start > 0 {
+        chunks.push(DiffChunk {
+            kind: DiffKind::Equal,
+            text: orig_tokens[..start].concat(),
+        });
+    }
+
+    let mid_orig = &orig_tokens[start..end_o];
+    let mid_ref = &ref_tokens[start..end_r];
+    if !mid_orig.is_empty() || !mid_ref.is_empty() {
+        if mid_orig.len().saturating_mul(mid_ref.len()) > MAX_LCS_CELLS {
+            // 2a. Changed middle too large for the DP table: a wholesale
+            //     replace keeps the diff correct and the memory bounded.
+            if !mid_orig.is_empty() {
+                chunks.push(DiffChunk {
+                    kind: DiffKind::Delete,
+                    text: mid_orig.concat(),
+                });
             }
+            if !mid_ref.is_empty() {
+                chunks.push(DiffChunk {
+                    kind: DiffKind::Insert,
+                    text: mid_ref.concat(),
+                });
+            }
+        } else {
+            // 2b. Standard LCS over the changed middle only.
+            let n = mid_orig.len();
+            let m = mid_ref.len();
+
+            let mut dp = vec![vec![0u32; m + 1]; n + 1];
+            for i in 0..n {
+                for j in 0..m {
+                    if mid_orig[i] == mid_ref[j] {
+                        dp[i + 1][j + 1] = dp[i][j] + 1;
+                    } else {
+                        dp[i + 1][j + 1] = dp[i + 1][j].max(dp[i][j + 1]);
+                    }
+                }
+            }
+
+            let mut middle = Vec::new();
+            let mut i = n;
+            let mut j = m;
+            while i > 0 || j > 0 {
+                if i > 0 && j > 0 && mid_orig[i - 1] == mid_ref[j - 1] {
+                    middle.push(DiffChunk {
+                        kind: DiffKind::Equal,
+                        text: mid_orig[i - 1].to_string(),
+                    });
+                    i -= 1;
+                    j -= 1;
+                } else if j > 0 && (i == 0 || dp[i][j - 1] >= dp[i - 1][j]) {
+                    middle.push(DiffChunk {
+                        kind: DiffKind::Insert,
+                        text: mid_ref[j - 1].to_string(),
+                    });
+                    j -= 1;
+                } else if i > 0 {
+                    middle.push(DiffChunk {
+                        kind: DiffKind::Delete,
+                        text: mid_orig[i - 1].to_string(),
+                    });
+                    i -= 1;
+                }
+            }
+            middle.reverse();
+            chunks.extend(middle);
         }
     }
 
-    // Backtrack to find diff
-    let mut chunks = Vec::new();
-    let mut i = n;
-    let mut j = m;
-
-    while i > 0 || j > 0 {
-        if i > 0 && j > 0 && orig_tokens[i - 1] == ref_tokens[j - 1] {
-            chunks.push(DiffChunk {
-                kind: DiffKind::Equal,
-                text: orig_tokens[i - 1].to_string(),
-            });
-            i -= 1;
-            j -= 1;
-        } else if j > 0 && (i == 0 || dp[i][j - 1] >= dp[i - 1][j]) {
-            chunks.push(DiffChunk {
-                kind: DiffKind::Insert,
-                text: ref_tokens[j - 1].to_string(),
-            });
-            j -= 1;
-        } else if i > 0 {
-            chunks.push(DiffChunk {
-                kind: DiffKind::Delete,
-                text: orig_tokens[i - 1].to_string(),
-            });
-            i -= 1;
-        }
+    if end_o < orig_tokens.len() {
+        chunks.push(DiffChunk {
+            kind: DiffKind::Equal,
+            text: orig_tokens[end_o..].concat(),
+        });
     }
 
-    chunks.reverse();
-
-    // Merge adjacent chunks of the same kind
+    // 3. Merge adjacent chunks of the same kind
     let mut merged: Vec<DiffChunk> = Vec::new();
     for chunk in chunks {
         if let Some(last) = merged.last_mut() {
@@ -188,5 +249,39 @@ mod tests {
     fn test_diff_cjk() {
         let (chunks, _) = compute_diff("今日的天气很好", "今日的天气非常非常好");
         assert!(chunks.iter().any(|c| c.kind == DiffKind::Insert && c.text.contains("非常非常")));
+    }
+
+    #[test]
+    fn test_diff_reconstruction() {
+        // Both directions must reconstruct exactly: Insert+Equal -> refined,
+        // Delete+Equal -> original.
+        let (chunks, _) = compute_diff("The quick brown fox", "The fast brown fox jumps");
+        let refined: String = chunks
+            .iter()
+            .filter(|c| c.kind != DiffKind::Delete)
+            .map(|c| c.text.as_str())
+            .collect();
+        let original: String = chunks
+            .iter()
+            .filter(|c| c.kind != DiffKind::Insert)
+            .map(|c| c.text.as_str())
+            .collect();
+        assert_eq!(refined, "The fast brown fox jumps");
+        assert_eq!(original, "The quick brown fox");
+    }
+
+    #[test]
+    fn test_diff_large_input_bounded() {
+        // A wholesomely different large pair takes the bounded fallback path;
+        // reconstruction must stay exact without reserving a giant DP table.
+        let original: String = "alpha ".repeat(200_000);
+        let refined: String = "omega ".repeat(200_000);
+        let (chunks, _) = compute_diff(&original, &refined);
+        let rebuilt: String = chunks
+            .iter()
+            .filter(|c| c.kind != DiffKind::Delete)
+            .map(|c| c.text.as_str())
+            .collect();
+        assert_eq!(rebuilt, refined);
     }
 }

@@ -2,8 +2,8 @@
 
 use crate::diff::{DiffChunk, DiffKind};
 use eframe::egui::{
-    self, Color32, CornerRadius, FontId, Pos2, Response, RichText, Sense, Stroke,
-    StrokeKind, Ui, Vec2, Visuals,
+    self, Color32, CornerRadius, FontId, Pos2, Rect, Response, RichText, Sense,
+    Stroke, StrokeKind, TextFormat, Ui, Vec2, Visuals,
 };
 
 /// Monochrome UI icon glyphs from Segoe MDL2 Assets (Windows system font).
@@ -330,57 +330,131 @@ pub fn spectrum_badge(ui: &mut Ui, text: &str, bg_color: Color32, text_color: Co
     });
 }
 
-/// Adobe Spectrum 2 Diff Renderer: Displays word additions (green) and deletions (red)
+/// Standard Spectrum card frame shared by every Studio panel card, so cards
+/// always agree on fill, stroke, radius, and margins.
+pub fn card_frame(theme: &SpectrumTheme, inner_margin: egui::Margin) -> egui::Frame {
+    egui::Frame::new()
+        .fill(theme.surface)
+        .stroke(Stroke::new(1.0, theme.border))
+        .corner_radius(CornerRadius::same(8))
+        .inner_margin(inner_margin)
+}
+
+/// Renderer for the refined-vs-original diff: one wrapped `LayoutJob` so egui
+/// line-breaks at the panel width. Wrapped per-chunk frames collapsed into a
+/// one-character-wide column for many-chunk diffs; a single job flows
+/// correctly, and per-section `TextFormat` backgrounds paint GitHub-style
+/// line highlights behind the changed runs.
 pub fn render_diff_view(ui: &mut Ui, chunks: &[DiffChunk], theme: &SpectrumTheme) {
-    ui.horizontal_wrapped(|ui| {
-        ui.spacing_mut().item_spacing = Vec2::new(1.0, 4.0);
-        for chunk in chunks {
-            match chunk.kind {
-                DiffKind::Equal => {
-                    ui.label(RichText::new(&chunk.text).color(theme.text_primary).font(FontId::proportional(14.0)));
-                }
-                DiffKind::Delete => {
-                    ui.scope(|ui| {
-                        egui::Frame::new()
-                            .fill(egui::Color32::from_rgba_premultiplied(
-                                theme.diff_del_text.r(),
-                                theme.diff_del_text.g(),
-                                theme.diff_del_text.b(),
-                                14,
-                            ))
-                            .corner_radius(CornerRadius::same(3))
-                            .inner_margin(egui::Margin::symmetric(3, 1))
-                            .show(ui, |ui| {
-                                ui.label(
-                                    RichText::new(&chunk.text)
-                                        .color(theme.diff_del_text)
-                                        .font(FontId::proportional(14.0))
-                                        .strikethrough(),
-                                );
-                            });
-                    });
-                }
-                DiffKind::Insert => {
-                    ui.scope(|ui| {
-                        egui::Frame::new()
-                            .fill(egui::Color32::from_rgba_premultiplied(
-                                theme.diff_add_text.r(),
-                                theme.diff_add_text.g(),
-                                theme.diff_add_text.b(),
-                                18,
-                            ))
-                            .corner_radius(CornerRadius::same(3))
-                            .inner_margin(egui::Margin::symmetric(3, 1))
-                            .show(ui, |ui| {
-                                ui.label(
-                                    RichText::new(&chunk.text)
-                                        .color(theme.diff_add_text)
-                                        .font(FontId::proportional(14.0)),
-                                );
-                            });
-                    });
-                }
+    if chunks.is_empty() {
+        return;
+    }
+
+    let font = FontId::proportional(14.0);
+    let mut job = eframe::epaint::text::LayoutJob::default();
+    for chunk in chunks {
+        let mut format = TextFormat {
+            font_id: font.clone(),
+            color: theme.text_primary,
+            ..Default::default()
+        };
+        match chunk.kind {
+            DiffKind::Equal => {}
+            DiffKind::Delete => {
+                format.color = theme.diff_del_text;
+                format.background = theme.diff_del_bg;
+                format.strikethrough = Stroke::new(1.0, theme.diff_del_text);
+            }
+            DiffKind::Insert => {
+                format.color = theme.diff_add_text;
+                format.background = theme.diff_add_bg;
             }
         }
-    });
+        job.append(&chunk.text, 1.0, format);
+    }
+
+    ui.add(egui::Label::new(job).wrap());
+}
+
+/// Fixed-width verb button with the keyboard shortcut rendered as a chip:
+/// "Copy  [Ctrl+C]". Painted directly so the shortcut looks like a key cap
+/// instead of flat double-space text.
+/// Returns the response for click detection; hover/primary states styled
+/// like `spectrum_button`.
+pub fn kbd_button(
+    ui: &mut Ui,
+    label: &str,
+    kbd: &str,
+    primary: bool,
+    width: f32,
+    theme: &SpectrumTheme,
+) -> Response {
+    let (rect, response) = ui.allocate_exact_size(Vec2::new(width, 28.0), Sense::click());
+
+    let fill = if response.hovered() {
+        if primary {
+            theme.accent_hover
+        } else {
+            theme.surface_hover
+        }
+    } else if primary {
+        theme.accent
+    } else {
+        theme.surface_elevated
+    };
+    let corner = CornerRadius::same(6);
+    ui.painter().rect_filled(rect, corner, fill);
+    if !primary {
+        ui.painter()
+            .rect_stroke(rect, corner, Stroke::new(1.0, theme.border), StrokeKind::Inside);
+    }
+
+    let text_color = if primary {
+        Color32::WHITE
+    } else {
+        theme.text_primary
+    };
+    let font = FontId::proportional(12.0);
+    let label_galley = ui
+        .painter()
+        .layout(label.to_string(), font, text_color, f32::INFINITY);
+    let kbd_galley = ui.painter().layout(
+        kbd.to_string(),
+        FontId::proportional(12.0),
+        if primary { Color32::WHITE } else { theme.text_secondary },
+        f32::INFINITY,
+    );
+
+    // Key-cap chip on the right edge; plain label on the left.
+    let pad = 5.0;
+    let chip_size = Vec2::new(
+        kbd_galley.size().x + 2.0 * pad,
+        kbd_galley.size().y + 4.0,
+    );
+    let chip_rect = Rect::from_min_size(
+        Pos2::new(rect.right() - 12.0 - chip_size.x, rect.center().y - chip_size.y / 2.0),
+        chip_size,
+    );
+    let chip_fill = if primary {
+        Color32::from_black_alpha(50)
+    } else {
+        theme.surface_active
+    };
+    ui.painter()
+        .rect_filled(chip_rect, CornerRadius::same(3), chip_fill);
+    ui.painter().galley(
+        Pos2::new(
+            chip_rect.center().x - kbd_galley.size().x / 2.0,
+            chip_rect.center().y - kbd_galley.size().y / 2.0,
+        ),
+        kbd_galley,
+        Color32::WHITE,
+    );
+    ui.painter().galley(
+        Pos2::new(rect.left() + 10.0, rect.center().y - label_galley.size().y / 2.0),
+        label_galley,
+        Color32::WHITE,
+    );
+
+    response
 }
