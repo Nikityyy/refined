@@ -59,7 +59,9 @@ pub struct Hud {
     /// Demo mode: do not auto-dismiss on focus loss (so the UI can be inspected).
     pub demo_sticky: bool,
     /// Height the diff view measured for its own content - the window hugs
-    /// the diff instead of leaving dead space below the buttons.
+    /// the diff instead of leaving dead space below the buttons. Assembled
+    /// from cursor landmarks (see render_ui), never from the window's
+    /// current size, so it cannot feed on its own resize lag.
     pub measured_diff_height: f32,
     /// Generation token: bumped whenever an old run must be invalidated
     /// (HUD re-opened, closed, or a new action triggered). A worker whose
@@ -307,7 +309,9 @@ impl Hud {
                             duration_ms,
                         };
                         // Start from the full box; the first rendered frame
-                        // re-measures and the window shrinks to its content.
+                        // re-measures deterministically (cursor landmarks,
+                        // not window size) and the window shrinks to its
+                        // content once, with no feedback loop.
                         self.measured_diff_height = 430.0;
                         ctx.request_repaint();
                     }
@@ -567,6 +571,8 @@ impl Hud {
         }
 
         let should_close = std::cell::Cell::new(false);
+        // DiffView cursor landmarks for the content-height measurement below.
+        let mut diff_metrics: Option<(f32, f32, f32, f32, bool)> = None;
 
         match &self.state {
             HudState::SelectingAction => {
@@ -751,7 +757,13 @@ impl Hud {
 
                 ui.add_space(10.0);
 
-                egui::ScrollArea::vertical()
+                // Captured to compute the window's exact natural height
+                // AFTER the paint: unlike `min_rect`, cursor positions do
+                // not depend on how tall the window happens to be right now,
+                // so the measurement cannot feed on its own resize lag.
+                let y_before_scroll = ui.cursor().min.y;
+
+                let scroll = egui::ScrollArea::vertical()
                     .max_height(200.0)
                     .auto_shrink([false, true])
                     .show(ui, |ui| {
@@ -771,7 +783,13 @@ impl Hud {
                             });
                     });
 
+                let scroll_h = scroll.content_size.y.min(200.0);
+                // A frame painted before the OS applied the resize shows a
+                // squeezed scroll box; its landmarks are transient noise.
+                let scroll_valid = scroll.inner_rect.height() >= scroll_h - 0.5;
+
                 ui.add_space(10.0);
+                let y_after_scroll = ui.cursor().min.y;
                 ui.horizontal(|ui| {
                     // Every verb carries an icon + label + keycap chip: one
                     // consistent pattern across the app.
@@ -806,16 +824,47 @@ impl Hud {
                         .font(FontId::proportional(12.0))
                         .color(theme.text_tertiary),
                 );
+
+                diff_metrics = Some((
+                    y_before_scroll,
+                    scroll_h,
+                    y_after_scroll,
+                    ui.cursor().min.y,
+                    scroll_valid,
+                ));
             }
         }
 
-        // In the diff view the window hugs its content: measure the used
-        // column height and remember it for the next frame's viewport size,
-        // so short diffs don't sit in a sea of empty space. The panel paints
-        // 12px margins + 1px stroke top and bottom.
-        if matches!(self.state, HudState::DiffView { .. }) && !should_close.get() {
-            let used = ui.min_rect().height() + 26.0;
-            self.measured_diff_height = used.clamp(240.0, 430.0);
+        // In the diff view the window hugs its content. The naive measure
+        // (`min_rect`) can include the whole window (panels fill their rect),
+        // and the OS applies a viewport resize one frame late - feeding that
+        // back ping-ponged the window between two sizes forever. Instead the
+        // natural height is assembled from cursor landmarks and the scroll
+        // area's own rect, none of which depend on the current window size:
+        // top margin/header/summary, the capped scroll box, buttons + hint,
+        // plus the panel's own margins and strokes.
+        if let Some((y_before, scroll_h, y_after, y_end, scroll_valid)) = diff_metrics {
+            if scroll_valid {
+                let h = (26.0
+                    + y_before
+                    + scroll_h
+                    + (y_end - y_after))
+                    .clamp(240.0, 430.0);
+                #[cfg(feature = "demo")]
+                if std::env::var("REFINED_DEBUG_SIZE").is_ok() {
+                    eprintln!(
+                        "[size] y_before={:.1} scroll_h={:.1} below={:.1} -> h={:.1} (current {:.1})",
+                        y_before,
+                        scroll_h,
+                        y_end - y_after,
+                        h,
+                        self.measured_diff_height
+                    );
+                }
+                if (h - self.measured_diff_height).abs() > 0.5 {
+                    self.measured_diff_height = h;
+                }
+            }
         }
 
         if should_close.get() {

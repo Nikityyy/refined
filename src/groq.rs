@@ -273,6 +273,8 @@ pub fn complete_action(
         (req_body.reasoning_effort.clone(), 16384),
         (None, 8192),
         (None, 4096),
+        (None, 2048),
+        (None, 1024),
     ];
     attempts.dedup();
 
@@ -292,19 +294,40 @@ pub fn complete_action(
         {
             Ok(r) => break Ok(r),
             Err(e) => {
-                // Only fall back on parameter-rejection style errors (HTTP
-                // 400, read off the typed status); on auth/quota/network
-                // failures retrying is pointless.
-                let is_bad_request =
-                    matches!(e, ureq::Error::StatusCode(400));
                 last_err = e.to_string();
-                if !is_bad_request {
-                    break Err(format!("Groq API error: {last_err}"));
-                }
-                if attempts.len() > 1 {
-                    attempts.remove(0);
-                } else {
-                    break Err(format!("Groq API error: {last_err}"));
+                match &e {
+                    ureq::Error::StatusCode(400) => {
+                        // Parameter-rejection: retry with the effort dropped
+                        // first, then smaller budgets.
+                        if attempts.len() > 1 {
+                            attempts.remove(0);
+                        } else {
+                            break Err(format!("Groq API error: {last_err}"));
+                        }
+                    }
+                    ureq::Error::StatusCode(413) => {
+                        // Requested tokens count against the org's
+                        // tokens-per-minute budget: a same-size retry can
+                        // never help, so hop straight to the next smaller
+                        // completion budget.
+                        loop {
+                            match attempts.first() {
+                                Some((_, t)) if *t == tokens => {
+                                    attempts.remove(0);
+                                }
+                                _ => break,
+                            }
+                        }
+                        if attempts.is_empty() {
+                            break Err(format!(
+                                "Groq rate limit: your tokens-per-minute budget is exhausted - try again in a minute ({last_err})"
+                            ));
+                        }
+                    }
+                    _ => {
+                        // Auth/quota/network failures: retrying is pointless.
+                        break Err(format!("Groq API error: {last_err}"));
+                    }
                 }
             }
         }
