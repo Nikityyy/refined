@@ -2,7 +2,7 @@
 
 use crate::diff::{DiffChunk, DiffKind};
 use eframe::egui::{
-    self, Align2, Color32, CornerRadius, FontId, Pos2, Response, RichText, Sense, Stroke,
+    self, Color32, CornerRadius, FontId, Pos2, Response, RichText, Sense, Stroke,
     StrokeKind, Ui, Vec2, Visuals,
 };
 
@@ -212,32 +212,39 @@ pub fn setup_custom_fonts(ctx: &egui::Context) {
     ctx.set_fonts(fonts);
 }
 
-/// Renders the authentic Adobe Creative Cloud 'Rf' mnemonic badge with glowing squircle.
+/// Refined product badge in the Studio header: the actual app icon
+/// (same art as the exe/tray icon), uploaded once and reused.
 pub fn render_rf_logo(ui: &mut Ui, size: f32) {
-    let (rect, _) = ui.allocate_exact_size(Vec2::splat(size), Sense::hover());
-    if ui.is_rect_visible(rect) {
-        let radius = (size * 0.28).round() as u8;
-        // Dark slate squircle background
-        ui.painter().rect_filled(rect, CornerRadius::same(radius), Color32::from_rgb(0x10, 0x0F, 0x12));
+    use std::sync::OnceLock;
 
-        // Luminous electric blue border
-        ui.painter().rect_stroke(
-            rect,
-            CornerRadius::same(radius),
-            Stroke::new(1.5, Color32::from_rgb(0x3B, 0x82, 0xF6)),
-            StrokeKind::Inside,
-        );
+    static LOGO: OnceLock<std::sync::Mutex<Option<egui::TextureHandle>>> = OnceLock::new();
+    let cache = LOGO.get_or_init(|| std::sync::Mutex::new(None));
 
-        // 'Rf' mnemonic text in electric blue
-        let font_id = FontId::proportional(size * 0.50);
-        ui.painter().text(
-            rect.center(),
-            Align2::CENTER_CENTER,
-            "Rf",
-            font_id,
-            Color32::from_rgb(0x3B, 0x82, 0xF6),
-        );
-    }
+    let ctx = ui.ctx().clone();
+    let tex_handle = {
+        let mut guard = cache.lock().unwrap();
+        guard
+            .get_or_insert_with(|| {
+                let rgba = crate::icon::rgba(64);
+                ctx.load_texture(
+                    "refined_logo",
+                    egui::ColorImage::from_rgba_unmultiplied([64, 64], &rgba),
+                    egui::TextureOptions::default(),
+                )
+            })
+            .clone()
+    };
+
+    // The icon is square; show it crisp at the pixel grid.
+    let rect = ui
+        .allocate_exact_size(Vec2::splat(size), Sense::hover())
+        .0;
+    ui.painter().image(
+        tex_handle.id(),
+        rect,
+        eframe::epaint::Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)),
+        Color32::WHITE,
+    );
 }
 
 /// Adobe Spectrum 2 Primary or Secondary Button
