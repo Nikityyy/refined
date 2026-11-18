@@ -1,4 +1,4 @@
-﻿//! Actions and prompt templates for Refined.
+//! Actions and prompt templates for Refined.
 //! Includes built-in actions, user customization, reset options, and language support.
 
 use serde::{Deserialize, Serialize};

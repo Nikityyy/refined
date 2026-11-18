@@ -1,4 +1,4 @@
-﻿//! Groq AI API client.
+//! Groq AI API client.
 //! Fetches dynamic chat models and reasoning effort options, and executes completions.
 
 use serde::{Deserialize, Serialize};
@@ -23,7 +23,7 @@ impl Default for GroqConfig {
             reasoning_effort: "high".to_string(),
             temperature: 1.0,
             top_p: 1.0,
-            max_completion_tokens: 65536,
+            max_completion_tokens: 32768,
             global_system_prompt: "You are Refined, a precision writing and editing assistant. Your task is to transform the provided text according to the requested action with utmost clarity, elegance, and stylistic excellence. Preserve the original structural formatting (paragraphs, line breaks, indentation, bullet points, numbering, and capitalization style). Return ONLY the refined text directly with no greeting, explanation, surrounding quotes, or commentary.".to_string(),
         }
     }
@@ -99,16 +99,10 @@ struct ChatCompletionResponse {
     usage: Option<ChatUsage>,
 }
 
-#[derive(Deserialize)]
-#[allow(dead_code)]
-struct GroqErrorResponse {
-    error: Option<GroqErrorDetail>,
-}
-
-#[derive(Deserialize)]
-#[allow(dead_code)]
-struct GroqErrorDetail {
-    message: Option<String>,
+/// Cleans raw completion output without destroying indentation or list structure.
+pub fn clean_generated_text(raw: &str) -> String {
+    // Strip leading and trailing newlines only, preserving inline/block indentation
+    raw.trim_matches(|c| c == '\r' || c == '\n').to_string()
 }
 
 /// Fetches models list from Groq API and filters to chat models only.
@@ -201,7 +195,10 @@ pub fn complete_action(
         Some(config.reasoning_effort.clone())
     };
 
-    let req_body = ChatCompletionRequest {
+    // Clamp token limit safely for Groq model context limits
+    let clamped_tokens = config.max_completion_tokens.clamp(256, 32768);
+
+    let mut req_body = ChatCompletionRequest {
         model: config.model.clone(),
         messages: vec![
             ChatMessage {
@@ -214,7 +211,7 @@ pub fn complete_action(
             },
         ],
         temperature: config.temperature,
-        max_completion_tokens: config.max_completion_tokens,
+        max_completion_tokens: clamped_tokens,
         top_p: config.top_p,
         reasoning_effort: effort,
         stream: false,
@@ -229,39 +226,49 @@ pub fn complete_action(
         .header("Content-Type", "application/json")
         .send_json(&req_body);
 
-    match resp {
-        Ok(res) => {
-            let duration_ms = start.elapsed().as_millis();
-            let body: ChatCompletionResponse = res
-                .into_body()
-                .read_json()
-                .map_err(|e| format!("Failed to parse Groq response: {e}"))?;
-
-            let content = body
-                .choices
-                .into_iter()
-                .find_map(|c| c.message.content)
-                .unwrap_or_default();
-
-            let (prompt_tokens, completion_tokens) = if let Some(u) = body.usage {
-                (u.prompt_tokens, u.completion_tokens)
-            } else {
-                (None, None)
-            };
-
-            Ok(CompletionResponse {
-                text: content.trim().to_string(),
-                duration_ms,
-                model: config.model.clone(),
-                prompt_tokens,
-                completion_tokens,
-            })
-        }
+    let res = match resp {
+        Ok(r) => r,
         Err(e) => {
-            // Check for API error details in body if HTTP response is available
-            let err_msg = format!("Groq API error: {e}");
-            Err(err_msg)
+            // If the model rejected reasoning_effort, retry without it
+            if req_body.reasoning_effort.is_some() {
+                req_body.reasoning_effort = None;
+                match ureq::post(url)
+                    .header("Authorization", &format!("Bearer {key}"))
+                    .header("Content-Type", "application/json")
+                    .send_json(&req_body)
+                {
+                    Ok(r) => r,
+                    Err(e2) => return Err(format!("Groq API error: {e2}")),
+                }
+            } else {
+                return Err(format!("Groq API error: {e}"));
+            }
         }
-    }
-}
+    };
 
+    let duration_ms = start.elapsed().as_millis();
+    let body: ChatCompletionResponse = res
+        .into_body()
+        .read_json()
+        .map_err(|e| format!("Failed to parse Groq response: {e}"))?;
+
+    let content = body
+        .choices
+        .into_iter()
+        .find_map(|c| c.message.content)
+        .unwrap_or_default();
+
+    let (prompt_tokens, completion_tokens) = if let Some(u) = body.usage {
+        (u.prompt_tokens, u.completion_tokens)
+    } else {
+        (None, None)
+    };
+
+    Ok(CompletionResponse {
+        text: clean_generated_text(&content),
+        duration_ms,
+        model: config.model.clone(),
+        prompt_tokens,
+        completion_tokens,
+    })
+}

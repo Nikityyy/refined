@@ -1,4 +1,4 @@
-﻿//! Refinement history records and persistence models.
+//! Refinement history records and persistence models.
 
 use crate::diff::{DiffChunk, DiffStats};
 use chrono::{DateTime, Local};

@@ -1,5 +1,6 @@
-﻿//! Word-level text diffing with whitespace preservation.
+//! Word-level text diffing with whitespace preservation.
 //! Computes additions, deletions, and unchanged segments using LCS.
+//! Supports CJK (Chinese, Japanese, Korean) fine-grained tokenization.
 
 use serde::{Deserialize, Serialize};
 
@@ -37,13 +38,32 @@ impl DiffStats {
     }
 }
 
-/// Tokenizes text into words and intervening whitespace/punctuation tokens.
+/// Returns true if character is a CJK ideograph, Kana, or Hangul symbol
+/// that should be tokenized individually rather than lumped into a space-delimited word.
+fn is_cjk(ch: char) -> bool {
+    matches!(ch,
+        '\u{2E80}'..='\u{2FD5}' | // CJK Radicals / Kangxi Radicals
+        '\u{3040}'..='\u{309F}' | // Hiragana
+        '\u{30A0}'..='\u{30FF}' | // Katakana
+        '\u{31F0}'..='\u{31FF}' | // Katakana Phonetic Extensions
+        '\u{3400}'..='\u{4DBF}' | // CJK Unified Ideographs Ext A
+        '\u{4E00}'..='\u{9FFF}' | // CJK Unified Ideographs
+        '\u{F900}'..='\u{FAFF}' | // CJK Compatibility Ideographs
+        '\u{AC00}'..='\u{D7AF}'   // Hangul Syllables
+    )
+}
+
+/// Tokenizes text into words, CJK characters, and intervening whitespace/punctuation.
 fn tokenize(s: &str) -> Vec<&str> {
     let mut tokens = Vec::new();
     let mut chars = s.char_indices().peekable();
 
     while let Some((start, ch)) = chars.next() {
-        if ch.is_whitespace() {
+        if is_cjk(ch) {
+            // Emit single CJK character token
+            let next_idx = chars.peek().map(|&(idx, _)| idx).unwrap_or(s.len());
+            tokens.push(&s[start..next_idx]);
+        } else if ch.is_whitespace() {
             // Group whitespace together
             while let Some(&(next_idx, next_ch)) = chars.peek() {
                 if next_ch.is_whitespace() {
@@ -57,9 +77,9 @@ fn tokenize(s: &str) -> Vec<&str> {
                 tokens.push(&s[start..]);
             }
         } else if ch.is_alphanumeric() {
-            // Group alphanumeric word
+            // Group alphanumeric word (stopping if next is CJK or space)
             while let Some(&(next_idx, next_ch)) = chars.peek() {
-                if next_ch.is_alphanumeric() {
+                if next_ch.is_alphanumeric() && !is_cjk(next_ch) {
                     chars.next();
                 } else {
                     tokens.push(&s[start..next_idx]);
@@ -87,7 +107,6 @@ pub fn compute_diff(original: &str, refined: &str) -> (Vec<DiffChunk>, DiffStats
     let m = ref_tokens.len();
 
     // Standard LCS table
-    // For reasonably sized selection paragraphs (up to a few thousand tokens)
     let mut dp = vec![vec![0u32; m + 1]; n + 1];
     for i in 0..n {
         for j in 0..m {
@@ -163,5 +182,10 @@ mod tests {
         assert!(chunks.iter().any(|c| c.kind == DiffKind::Delete && c.text.contains("quick")));
         assert!(chunks.iter().any(|c| c.kind == DiffKind::Insert && c.text.contains("fast")));
     }
-}
 
+    #[test]
+    fn test_diff_cjk() {
+        let (chunks, _) = compute_diff("今日的天气很好", "今日的天气非常非常好");
+        assert!(chunks.iter().any(|c| c.kind == DiffKind::Insert && c.text.contains("非常非常")));
+    }
+}

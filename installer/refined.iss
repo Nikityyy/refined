@@ -1,4 +1,4 @@
-#ifndef AppVersion
+﻿#ifndef AppVersion
   #error Pass /DAppVersion from build-installer.ps1
 #endif
 
@@ -37,6 +37,7 @@ OutputDir=..\target\installer
 OutputBaseFilename=Refined-Setup-{#AppVersion}
 VersionInfoVersion={#AppVersion}
 VersionInfoDescription=Refined installieren
+LicenseFile=..\LICENSE
 
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"

@@ -1,4 +1,4 @@
-﻿//! Refined Studio: History, Statistics, Action Customization, and Groq Settings.
+//! Refined Studio: History, Statistics, Action Customization, and Groq Settings.
 
 use crate::actions::{default_actions, ActionItem};
 use crate::autostart;
@@ -56,7 +56,7 @@ impl Studio {
             new_action_dialog_open: false,
             new_action_name: String::new(),
             new_action_desc: String::new(),
-            new_action_icon: "âœ¦".to_string(),
+            new_action_icon: "✦".to_string(),
             new_action_shortcut: String::new(),
             new_action_prompt: String::new(),
         }
@@ -106,7 +106,7 @@ impl Studio {
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
                     ui.label(
-                        RichText::new("âœ¦ REFINED STUDIO")
+                        RichText::new("✦ REFINED STUDIO")
                             .font(FontId::proportional(15.0))
                             .color(theme.accent)
                             .strong(),
@@ -177,7 +177,7 @@ impl Studio {
 
                 ui.add(
                     egui::TextEdit::singleline(&mut self.history_search)
-                        .hint_text("ðŸ” Search text or action...")
+                        .hint_text("🔍 Search text or action...")
                         .desired_width(180.0),
                 );
             });
@@ -190,7 +190,7 @@ impl Studio {
         if store.history.is_empty() {
             ui.vertical_centered(|ui| {
                 ui.add_space(60.0);
-                ui.label(RichText::new("âœ¦").font(FontId::proportional(36.0)).color(theme.text_tertiary));
+                ui.label(RichText::new("✦").font(FontId::proportional(36.0)).color(theme.text_tertiary));
                 ui.label(
                     RichText::new("No refinements yet")
                         .font(FontId::proportional(16.0))
@@ -262,7 +262,7 @@ impl Studio {
                             );
 
                             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                                if ui.add(egui::Button::new(RichText::new("ðŸ—‘").color(theme.diff_del_text)).frame(false)).clicked() {
+                                if ui.add(egui::Button::new(RichText::new("🗑").color(theme.diff_del_text)).frame(false)).clicked() {
                                     entry_to_delete = Some(idx);
                                 }
 
@@ -472,7 +472,7 @@ impl Studio {
                     self.new_action_dialog_open = true;
                     self.new_action_name = "Summarize".to_string();
                     self.new_action_desc = "Condense into 3 key bullet points".to_string();
-                    self.new_action_icon = "âœ¦".to_string();
+                    self.new_action_icon = "✦".to_string();
                     self.new_action_shortcut = "7".to_string();
                     self.new_action_prompt = "Summarize the text into exactly 3 concise, impactful bullet points. Preserve the core insights.".to_string();
                 }
@@ -578,7 +578,7 @@ impl Studio {
 
                             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                                 if !action.is_builtin {
-                                    if ui.add(egui::Button::new(RichText::new("ðŸ—‘ Delete").color(theme.diff_del_text)).frame(false)).clicked() {
+                                    if ui.add(egui::Button::new(RichText::new("🗑 Delete").color(theme.diff_del_text)).frame(false)).clicked() {
                                         action_to_remove = Some(idx);
                                     }
                                 }
@@ -807,11 +807,13 @@ impl Studio {
 
                     ui.horizontal(|ui| {
                         let mut autostart_val = autostart::enabled();
-                        if ui.checkbox(&mut autostart_val, "Start Refined automatically with Windows").changed() {
+                        if crate::theme::spectrum_switch(ui, &mut autostart_val, theme).changed() {
                             autostart::set(autostart_val);
                             store.settings.autostart = autostart_val;
                             store.save_settings();
                         }
+                        ui.add_space(crate::theme::SPACE_8);
+                        ui.label(RichText::new("Start Refined automatically with Windows").color(theme.text_primary));
                     });
 
                     ui.add_space(6.0);

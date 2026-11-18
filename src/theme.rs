@@ -1,9 +1,27 @@
-﻿//! Adobe Spectrum 2 Design System tokens, color palettes, and custom widgets.
+//! Adobe Spectrum 2 Design System tokens, color palettes, and custom widgets.
 
 use crate::diff::{DiffChunk, DiffKind};
 use eframe::egui::{
-    self, Color32, CornerRadius, FontId, Response, RichText, Stroke, Ui, Vec2, Visuals,
+    self, Color32, CornerRadius, FontId, Pos2, Response, RichText, Sense, Stroke, StrokeKind, Ui,
+    Vec2, Visuals,
 };
+
+#[allow(dead_code)]
+pub const SPACE_2: f32 = 2.0;
+#[allow(dead_code)]
+pub const SPACE_4: f32 = 4.0;
+#[allow(dead_code)]
+pub const SPACE_8: f32 = 8.0;
+#[allow(dead_code)]
+pub const SPACE_12: f32 = 12.0;
+#[allow(dead_code)]
+pub const SPACE_16: f32 = 16.0;
+#[allow(dead_code)]
+pub const SPACE_20: f32 = 20.0;
+#[allow(dead_code)]
+pub const SPACE_24: f32 = 24.0;
+#[allow(dead_code)]
+pub const SPACE_32: f32 = 32.0;
 
 #[derive(Clone, Copy, Debug)]
 pub struct SpectrumTheme {
@@ -36,8 +54,8 @@ impl SpectrumTheme {
         if dark {
             Self {
                 is_dark: true,
-                background: Color32::from_rgb(0x18, 0x18, 0x1B),
-                surface: Color32::from_rgb(0x23, 0x23, 0x27),
+                background: Color32::from_rgb(0x18, 0x18, 0x1B), // Spectrum 2 Gray 100 Dark
+                surface: Color32::from_rgb(0x23, 0x23, 0x27),    // Spectrum 2 Gray 75 Dark
                 surface_elevated: Color32::from_rgb(0x2C, 0x2C, 0x31),
                 surface_hover: Color32::from_rgb(0x35, 0x35, 0x3B),
                 surface_active: Color32::from_rgb(0x40, 0x40, 0x48),
@@ -46,7 +64,7 @@ impl SpectrumTheme {
                 text_primary: Color32::from_rgb(0xFD, 0xFD, 0xFD),
                 text_secondary: Color32::from_rgb(0x9E, 0x9E, 0xA7),
                 text_tertiary: Color32::from_rgb(0x66, 0x66, 0x70),
-                accent: Color32::from_rgb(0x3B, 0x82, 0xF6),
+                accent: Color32::from_rgb(0x3B, 0x82, 0xF6), // Spectrum Blue 600
                 accent_hover: Color32::from_rgb(0x60, 0xA5, 0xFA),
                 accent_subtle: Color32::from_rgba_premultiplied(59, 130, 246, 35),
                 diff_add_bg: Color32::from_rgba_premultiplied(34, 197, 94, 38),
@@ -59,8 +77,8 @@ impl SpectrumTheme {
         } else {
             Self {
                 is_dark: false,
-                background: Color32::from_rgb(0xF5, 0xF5, 0xF7),
-                surface: Color32::from_rgb(0xFF, 0xFF, 0xFF),
+                background: Color32::from_rgb(0xF5, 0xF5, 0xF7), // Spectrum 2 Gray 100 Light
+                surface: Color32::from_rgb(0xFF, 0xFF, 0xFF),    // Spectrum 2 Surface Light
                 surface_elevated: Color32::from_rgb(0xFA, 0xFA, 0xFC),
                 surface_hover: Color32::from_rgb(0xEB, 0xEB, 0xF0),
                 surface_active: Color32::from_rgb(0xDF, 0xDF, 0xE5),
@@ -69,7 +87,7 @@ impl SpectrumTheme {
                 text_primary: Color32::from_rgb(0x18, 0x18, 0x1B),
                 text_secondary: Color32::from_rgb(0x64, 0x64, 0x6E),
                 text_tertiary: Color32::from_rgb(0x9E, 0x9E, 0xA6),
-                accent: Color32::from_rgb(0x02, 0x65, 0xDC),
+                accent: Color32::from_rgb(0x02, 0x65, 0xDC), // Spectrum Blue 800
                 accent_hover: Color32::from_rgb(0x00, 0x54, 0xB6),
                 accent_subtle: Color32::from_rgba_premultiplied(2, 101, 220, 24),
                 diff_add_bg: Color32::from_rgba_premultiplied(22, 163, 74, 30),
@@ -83,6 +101,7 @@ impl SpectrumTheme {
     }
 }
 
+/// Configures egui Visuals to match Adobe Spectrum 2 principles.
 pub fn configure_egui_theme(ctx: &egui::Context, theme: &SpectrumTheme) {
     let mut v = if theme.is_dark { Visuals::dark() } else { Visuals::light() };
 
@@ -120,6 +139,30 @@ pub fn configure_egui_theme(ctx: &egui::Context, theme: &SpectrumTheme) {
     ctx.set_visuals(v);
 }
 
+/// Sets up Segoe UI typography from Windows system fonts if available.
+pub fn setup_custom_fonts(ctx: &egui::Context) {
+    let mut fonts = egui::FontDefinitions::default();
+    let font_dir = std::path::Path::new("C:\\Windows\\Fonts");
+
+    if let Ok(bytes) = std::fs::read(font_dir.join("segoeui.ttf")) {
+        fonts.font_data.insert(
+            "SegoeUI".to_owned(),
+            std::sync::Arc::new(egui::FontData::from_owned(bytes)),
+        );
+        if let Some(family) = fonts.families.get_mut(&egui::FontFamily::Proportional) {
+            family.insert(0, "SegoeUI".to_owned());
+        }
+    }
+    if let Ok(bytes) = std::fs::read(font_dir.join("seguisb.ttf")) {
+        fonts.font_data.insert(
+            "SegoeUISemiBold".to_owned(),
+            std::sync::Arc::new(egui::FontData::from_owned(bytes)),
+        );
+    }
+
+    ctx.set_fonts(fonts);
+}
+
 /// Adobe Spectrum 2 Primary or Secondary Button
 pub fn spectrum_button(ui: &mut Ui, label: &str, primary: bool, theme: &SpectrumTheme) -> Response {
     let text = if primary {
@@ -141,6 +184,53 @@ pub fn spectrum_button(ui: &mut Ui, label: &str, primary: bool, theme: &Spectrum
     };
 
     ui.add(button)
+}
+
+/// Adobe Spectrum 2 Animated 40x22 Sliding Switch Toggle
+pub fn spectrum_switch(ui: &mut Ui, on: &mut bool, theme: &SpectrumTheme) -> Response {
+    let desired_size = Vec2::new(40.0, 22.0);
+    let (rect, mut response) = ui.allocate_exact_size(desired_size, Sense::click());
+    if response.clicked() {
+        *on = !*on;
+        response.mark_changed();
+    }
+
+    if ui.is_rect_visible(rect) {
+        let how_on = ui.ctx().animate_bool_responsive(response.id, *on);
+
+        let bg = if *on {
+            theme.accent
+        } else {
+            theme.surface_active
+        };
+
+        let border_stroke = if *on {
+            Stroke::NONE
+        } else {
+            Stroke::new(1.0, theme.border)
+        };
+
+        let radius = (rect.height() / 2.0).round() as u8;
+        ui.painter().rect_filled(rect, CornerRadius::same(radius), bg);
+        if border_stroke != Stroke::NONE {
+            ui.painter().rect_stroke(rect, CornerRadius::same(radius), border_stroke, StrokeKind::Inside);
+        }
+
+        let knob_radius = (rect.height() - 6.0) / 2.0;
+        let min_x = rect.min.x + 3.0 + knob_radius;
+        let max_x = rect.max.x - 3.0 - knob_radius;
+        let knob_x = egui::lerp(min_x..=max_x, how_on);
+        let knob_center = Pos2::new(knob_x, rect.center().y);
+
+        ui.painter().circle(
+            knob_center,
+            knob_radius,
+            Color32::WHITE,
+            Stroke::NONE,
+        );
+    }
+
+    response
 }
 
 /// Adobe Spectrum 2 Badge / Pill tag
@@ -201,4 +291,3 @@ pub fn render_diff_view(ui: &mut Ui, chunks: &[DiffChunk], theme: &SpectrumTheme
         }
     });
 }
-

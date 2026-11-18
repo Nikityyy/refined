@@ -1,4 +1,4 @@
-﻿//! Windows autostart configuration for Refined.
+//! Windows autostart configuration for Refined.
 
 use windows::core::{w, PCWSTR};
 use windows::Win32::System::Registry::{

@@ -1,4 +1,4 @@
-﻿//! Local persistent store for Refined settings, actions, and history.
+//! Local persistent store for Refined settings, actions, and history.
 
 use crate::actions::{default_actions, ActionItem};
 use crate::groq::GroqConfig;

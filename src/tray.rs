@@ -1,4 +1,4 @@
-﻿//! System tray icon and context menu.
+//! System tray icon and context menu.
 
 use eframe::egui::{self, ViewportCommand};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -11,7 +11,7 @@ pub struct Tray {
 }
 
 impl Tray {
-    pub fn new(ctx: egui::Context, quitting: Arc<AtomicBool>) -> Self {
+    pub fn new(ctx: egui::Context, quitting: Arc<AtomicBool>, studio_open: Arc<AtomicBool>) -> Self {
         let open_studio = MenuItem::new("Open Refined Studio", true, None);
         let quit = MenuItem::new("Quit Refined", true, None);
         let menu = Menu::new();
@@ -21,6 +21,7 @@ impl Tray {
         let quit_id = quit.id().clone();
 
         let ctx_click = ctx.clone();
+        let studio_open_click = studio_open.clone();
         TrayIconEvent::set_event_handler(Some(move |event| {
             if let TrayIconEvent::Click {
                 button: MouseButton::Left,
@@ -28,14 +29,17 @@ impl Tray {
                 ..
             } = event
             {
+                studio_open_click.store(true, Ordering::Relaxed);
                 show_studio_window(&ctx_click);
             }
         }));
 
         let ctx_menu = ctx.clone();
         let quitting_clone = quitting.clone();
+        let studio_open_menu = studio_open;
         MenuEvent::set_event_handler(Some(move |event: MenuEvent| {
             if event.id == open_studio_id {
+                studio_open_menu.store(true, Ordering::Relaxed);
                 show_studio_window(&ctx_menu);
             } else if event.id == quit_id {
                 quitting_clone.store(true, Ordering::Relaxed);

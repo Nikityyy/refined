@@ -1,4 +1,4 @@
-﻿//! Statistics aggregation and insights for Refined study sessions.
+//! Statistics aggregation and insights for Refined study sessions.
 
 use crate::history::HistoryEntry;
 use chrono::{Datelike, Local};

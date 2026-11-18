@@ -1,6 +1,6 @@
 //! Global Alt+Q Windows hotkey registration and selection trigger.
 
-use crate::clipboard::capture_selection;
+use crate::clipboard::capture_selection_with_window;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Sender;
 use std::sync::Arc;
@@ -19,6 +19,7 @@ pub struct TriggerPayload {
     pub selected_text: String,
     pub cursor_x: i32,
     pub cursor_y: i32,
+    pub target_hwnd: isize,
 }
 
 pub fn start_hotkey_listener(sender: Sender<TriggerPayload>, running: Arc<AtomicBool>) -> std::thread::JoinHandle<()> {
@@ -43,13 +44,14 @@ pub fn start_hotkey_listener(sender: Sender<TriggerPayload>, running: Arc<Atomic
                 }
                 if msg.message == WM_HOTKEY && msg.wParam.0 as i32 == HOTKEY_ID {
                     // Hotkey triggered: only proceed if text is actively selected!
-                    if let Some(text) = capture_selection() {
+                    if let Some(cap) = capture_selection_with_window() {
                         let mut pt = POINT::default();
                         let _ = GetCursorPos(&mut pt);
                         let _ = sender.send(TriggerPayload {
-                            selected_text: text,
+                            selected_text: cap.text,
                             cursor_x: pt.x,
                             cursor_y: pt.y,
+                            target_hwnd: cap.target_hwnd.0 as isize,
                         });
                     }
                 }

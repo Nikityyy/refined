@@ -79,6 +79,7 @@ fn main() -> eframe::Result {
                 hotkey_rx,
                 restore_event,
                 quitting_for_app,
+                !hidden,
             )))
         }),
     );
