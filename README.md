@@ -34,7 +34,7 @@ Refined is a lightweight study and writing companion for Windows. Select text in
   - **Actions**: Manage, customize, and extend the action palette.
   - **Settings**: Manage Groq API keys, models, themes, and Windows autostart.
 - **Polished, Minimal UI**: Native dark and light themes, keyboard-first navigation throughout.
-- **Ultra-Optimized Binary & Installer**: Single small standalone binary (~4 MB) and Inno Setup installer with LZMA2 ultra compression.
+- **Ultra-Optimized Binary & Installer**: Single small standalone binary (~5 MB) and Inno Setup installer with LZMA2 ultra compression.
 
 ---
 

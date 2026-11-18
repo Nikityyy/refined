@@ -482,30 +482,10 @@ pub fn render_diff_view(ui: &mut Ui, chunks: &[DiffChunk], theme: &SpectrumTheme
     // each strike piece spans its deleted run edge-to-edge with the run's
     // background (glyph edges + the same 1px pad egui gives backgrounds),
     // breaking exactly where wrapping breaks the run.
-    let debug = std::env::var_os("REFINED_STRIKE_DEBUG").is_some();
-    let dbg = |msg: String| {
-        if debug {
-            use std::io::Write;
-            if let Ok(mut f) =
-                std::fs::OpenOptions::new().create(true).append(true).open("refined-strike-debug.log")
-            {
-                let _ = writeln!(f, "{msg}");
-            }
-        }
-    };
-    dbg(format!("del_ranges: {del_ranges:?}"));
     let in_del = |c: usize| del_ranges.iter().any(|(s, e)| c >= *s && c < *e);
     let mut base = 0usize; // chars covered by all previous rows
     for placed in &galley.rows {
         let glyphs = &placed.row.glyphs;
-        dbg(format!(
-            "row pos=({:.1},{:.1}) glyphs={} nl={} text='{}'",
-            placed.pos.x,
-            placed.pos.y,
-            glyphs.len(),
-            placed.ends_with_newline,
-            placed.row.text()
-        ));
         let mut run: Option<(usize, usize)> = None; // glyph index range
 
         let strike_run = |placed: &eframe::egui::epaint::text::PlacedRow,
@@ -530,12 +510,6 @@ pub fn render_diff_view(ui: &mut Ui, chunks: &[DiffChunk], theme: &SpectrumTheme
             let x0 = placed.pos.x + first.pos.x - 1.0;
             let x1 = placed.pos.x + last.pos.x + last.advance_width + 1.0;
             let y = origin.y + baseline - first.font_ascent * 0.25;
-            dbg(format!(
-                "strike run x0={x0:.1} x1={x1:.1} y={y:.1} baseline={baseline:.1} ascent={:.1} origin_y={:.1} chars='{}'",
-                first.font_ascent,
-                origin.y,
-                glyphs[a..b].iter().map(|g| g.chr).collect::<String>()
-            ));
             if x1 > x0 {
                 painter.line_segment(
                     [Pos2::new(origin.x + x0, y), Pos2::new(origin.x + x1, y)],
