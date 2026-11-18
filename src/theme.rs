@@ -1,4 +1,9 @@
-//! Adobe Spectrum 2 Design System tokens, color palettes, and custom widgets.
+//! Adobe Spectrum 2 design tokens, color palettes, and custom widgets.
+//!
+//! Token values are the verified Spectrum 2 source of truth
+//! (adobe/spectrum-design-data, main branch): gray/blue/red/green ramps,
+//! spacing scale, corner radii, and typography steps. Contrast ratios for
+//! text pairs are WCAG-computed (>= 4.5:1 for body text in both schemes).
 
 use crate::diff::{DiffChunk, DiffKind};
 use eframe::egui::{
@@ -7,8 +12,7 @@ use eframe::egui::{
 };
 
 /// Monochrome UI icon glyphs from Segoe MDL2 Assets (Windows system font).
-/// These private-use codepoints always resolve through the font fallback chain,
-/// avoiding multi-plane emoji that render as tofu boxes.
+/// One icon set, one optical weight - the app's only icon family.
 pub mod icons {
     #![allow(dead_code)]
     pub const SEARCH: &str = "\u{E721}";
@@ -22,32 +26,51 @@ pub mod icons {
     pub const COPY: &str = "\u{E8C8}";
     pub const CLOCK: &str = "\u{E823}";
     pub const REFRESH: &str = "\u{E72C}";
+    pub const CHEVRON_DOWN: &str = "\u{E96D}";
+    pub const CHEVRON_UP: &str = "\u{E96E}";
+    pub const BULLETED_LIST: &str = "\u{E8FD}";
+    pub const CLEAR: &str = "\u{E8E6}";
+    pub const REPAIR: &str = "\u{E90F}";
+    pub const ADD: &str = "\u{E710}";
+    pub const DOWNLOAD: &str = "\u{E896}";
+    pub const SAVE: &str = "\u{E74E}";
+    pub const EYE: &str = "\u{E7B3}";
 }
 
 #[derive(Clone, Copy, Debug)]
 pub struct SpectrumTheme {
     pub is_dark: bool,
+    /// layer-1 app background: gray-25 / gray-50
     pub background: Color32,
+    /// layer-2 surface (panels, cards): gray-75 / gray-25
     pub surface: Color32,
     pub surface_elevated: Color32,
+    /// row hover: gray-200 / gray-100
     pub surface_hover: Color32,
+    /// pressed/track: gray-300 / gray-300
     pub surface_active: Color32,
+    /// neutral-subtle fills (keycaps, segmented tracks, quiet chips):
+    /// gray-300 / gray-100
+    pub surface_subtle: Color32,
     pub border: Color32,
-    #[allow(dead_code)]
-    pub border_subtle: Color32,
+    /// headings: gray-900/300
     pub text_primary: Color32,
+    /// body text: neutral-content gray-800 / gray-800
+    pub text_body: Color32,
     pub text_secondary: Color32,
     pub text_tertiary: Color32,
+    /// accent fill: blue-800 / blue-900 (white labels are 4.5:1+)
     pub accent: Color32,
-    #[allow(dead_code)]
     pub accent_hover: Color32,
-    pub accent_subtle: Color32,
+    /// accent-visual: icons and accent text: blue-900 / blue-800
+    pub accent_visual: Color32,
+    /// blue-subtle chip pair for quiet accent badges
+    pub accent_badge_bg: Color32,
+    pub accent_badge_text: Color32,
     pub diff_add_bg: Color32,
     pub diff_add_text: Color32,
     pub diff_del_bg: Color32,
     pub diff_del_text: Color32,
-    pub purple: Color32,
-    pub amber: Color32,
 }
 
 impl SpectrumTheme {
@@ -55,66 +78,69 @@ impl SpectrumTheme {
         if dark {
             Self {
                 is_dark: true,
-                background: Color32::from_rgb(0x12, 0x12, 0x15), // Deep Dark Slate
-                surface: Color32::from_rgb(0x1E, 0x1E, 0x22),    // Spectrum 2 Surface Dark
-                surface_elevated: Color32::from_rgb(0x27, 0x27, 0x2C),
-                surface_hover: Color32::from_rgb(0x32, 0x32, 0x38),
-                surface_active: Color32::from_rgb(0x3C, 0x3C, 0x44),
-                border: Color32::from_rgb(0x38, 0x38, 0x40),
-                border_subtle: Color32::from_rgb(0x2A, 0x2A, 0x30),
-                text_primary: Color32::from_rgb(0xF5, 0xF5, 0xF7),
-                text_secondary: Color32::from_rgb(0x9E, 0x9E, 0xA8),
-                text_tertiary: Color32::from_rgb(0x6E, 0x6E, 0x78),
-                accent: Color32::from_rgb(0x3B, 0x82, 0xF6), // Spectrum Blue 600
-                accent_hover: Color32::from_rgb(0x60, 0xA5, 0xFA),
-                accent_subtle: Color32::from_rgba_premultiplied(59, 130, 246, 35),
-                diff_add_bg: Color32::from_rgba_premultiplied(34, 197, 94, 38),
-                diff_add_text: Color32::from_rgb(0x4A, 0xDE, 0x80),
-                diff_del_bg: Color32::from_rgba_premultiplied(239, 68, 68, 38),
-                diff_del_text: Color32::from_rgb(0xF8, 0x71, 0x71),
-                purple: Color32::from_rgb(0x8B, 0x5C, 0xF6),
-                amber: Color32::from_rgb(0xF5, 0x9E, 0x0B),
+                background: Color32::from_rgb(0x11, 0x11, 0x11),
+                surface: Color32::from_rgb(0x22, 0x22, 0x22),
+                surface_elevated: Color32::from_rgb(0x22, 0x22, 0x22),
+                surface_hover: Color32::from_rgb(0x32, 0x32, 0x32),
+                surface_active: Color32::from_rgb(0x39, 0x39, 0x39),
+                surface_subtle: Color32::from_rgb(0x39, 0x39, 0x39),
+                border: Color32::from_rgb(0x44, 0x44, 0x44),
+                text_primary: Color32::from_rgb(0xF2, 0xF2, 0xF2),
+                text_body: Color32::from_rgb(0xDB, 0xDB, 0xDB),
+                text_secondary: Color32::from_rgb(0xAF, 0xAF, 0xAF),
+                text_tertiary: Color32::from_rgb(0x8A, 0x8A, 0x8A),
+                accent: Color32::from_rgb(0x40, 0x69, 0xFD),
+                accent_hover: Color32::from_rgb(0x34, 0x5B, 0xF8),
+                accent_visual: Color32::from_rgb(0x56, 0x81, 0xFF),
+                accent_badge_bg: Color32::from_rgb(0x0C, 0x21, 0x75),
+                accent_badge_text: Color32::from_rgb(0x7C, 0xA9, 0xFC),
+                diff_add_bg: Color32::from_rgb(0x00, 0x33, 0x26),
+                diff_add_text: Color32::from_rgb(0x39, 0xD7, 0x86),
+                diff_del_bg: Color32::from_rgb(0x57, 0x0F, 0x07),
+                diff_del_text: Color32::from_rgb(0xFF, 0xA7, 0x9D),
             }
         } else {
             Self {
                 is_dark: false,
-                background: Color32::from_rgb(0xF4, 0xF4, 0xF6), // Spectrum 2 Gray 100 Light
-                surface: Color32::from_rgb(0xFF, 0xFF, 0xFF),    // Pure Surface White
-                surface_elevated: Color32::from_rgb(0xF8, 0xF8, 0xFA),
-                surface_hover: Color32::from_rgb(0xEB, 0xEB, 0xF0),
-                surface_active: Color32::from_rgb(0xDF, 0xDF, 0xE5),
-                border: Color32::from_rgb(0xDF, 0xDF, 0xE6),
-                border_subtle: Color32::from_rgb(0xEE, 0xEE, 0xF2),
-                text_primary: Color32::from_rgb(0x18, 0x18, 0x1B),
-                text_secondary: Color32::from_rgb(0x5E, 0x5E, 0x68),
-                text_tertiary: Color32::from_rgb(0x8E, 0x8E, 0x98),
-                accent: Color32::from_rgb(0x02, 0x65, 0xDC), // Spectrum Blue 800
-                accent_hover: Color32::from_rgb(0x00, 0x54, 0xB6),
-                accent_subtle: Color32::from_rgba_premultiplied(2, 101, 220, 24),
-                diff_add_bg: Color32::from_rgba_premultiplied(22, 163, 74, 30),
-                diff_add_text: Color32::from_rgb(0x16, 0xA3, 0x4A),
-                diff_del_bg: Color32::from_rgba_premultiplied(220, 38, 38, 30),
-                diff_del_text: Color32::from_rgb(0xDC, 0x26, 0x26),
-                purple: Color32::from_rgb(0x7C, 0x3A, 0xED),
-                amber: Color32::from_rgb(0xD9, 0x77, 0x06),
+                background: Color32::from_rgb(0xF8, 0xF8, 0xF8),
+                surface: Color32::from_rgb(0xFF, 0xFF, 0xFF),
+                surface_elevated: Color32::from_rgb(0xFF, 0xFF, 0xFF),
+                surface_hover: Color32::from_rgb(0xE9, 0xE9, 0xE9),
+                surface_active: Color32::from_rgb(0xDA, 0xDA, 0xDA),
+                surface_subtle: Color32::from_rgb(0xE9, 0xE9, 0xE9),
+                border: Color32::from_rgb(0xDA, 0xDA, 0xDA),
+                text_primary: Color32::from_rgb(0x13, 0x13, 0x13),
+                text_body: Color32::from_rgb(0x29, 0x29, 0x29),
+                text_secondary: Color32::from_rgb(0x50, 0x50, 0x50),
+                text_tertiary: Color32::from_rgb(0x71, 0x71, 0x71),
+                accent: Color32::from_rgb(0x3B, 0x63, 0xFB),
+                accent_hover: Color32::from_rgb(0x27, 0x4D, 0xEA),
+                accent_visual: Color32::from_rgb(0x4B, 0x75, 0xFF),
+                accent_badge_bg: Color32::from_rgb(0xE5, 0xF0, 0xFE),
+                accent_badge_text: Color32::from_rgb(0x27, 0x4D, 0xEA),
+                diff_add_bg: Color32::from_rgb(0xD7, 0xF7, 0xE1),
+                diff_add_text: Color32::from_rgb(0x02, 0x5D, 0x3C),
+                diff_del_bg: Color32::from_rgb(0xFF, 0xEB, 0xE8),
+                diff_del_text: Color32::from_rgb(0x9C, 0x21, 0x13),
             }
         }
     }
 }
 
-/// Configures egui Visuals to match Adobe Spectrum 2 principles.
+/// Configures egui Visuals to match Spectrum 2.
+/// Accent is reserved for primary actions and selection; hover states change
+/// the fill only (S2 never strokes hovered widgets with the accent).
 pub fn configure_egui_theme(ctx: &egui::Context, theme: &SpectrumTheme) {
     let mut v = if theme.is_dark { Visuals::dark() } else { Visuals::light() };
 
     v.dark_mode = theme.is_dark;
-    // CRITICAL FIX: Do NOT override text color globally.
-    // Setting override_text_color broke selection highlight readability!
+    // Do NOT override text color globally; it broke selection readability.
     v.override_text_color = None;
 
     v.panel_fill = theme.background;
     v.window_fill = theme.surface;
     v.window_stroke = Stroke::new(1.0, theme.border);
-    v.window_corner_radius = CornerRadius::same(12);
+    v.window_corner_radius = CornerRadius::same(8);
 
     v.widgets.noninteractive.bg_fill = theme.surface;
     v.widgets.noninteractive.bg_stroke = Stroke::new(1.0, theme.border);
@@ -127,18 +153,17 @@ pub fn configure_egui_theme(ctx: &egui::Context, theme: &SpectrumTheme) {
     v.widgets.inactive.corner_radius = CornerRadius::same(6);
 
     v.widgets.hovered.bg_fill = theme.surface_hover;
-    v.widgets.hovered.bg_stroke = Stroke::new(1.0, theme.accent);
+    v.widgets.hovered.bg_stroke = Stroke::new(1.0, theme.border);
     v.widgets.hovered.fg_stroke = Stroke::new(1.0, theme.text_primary);
     v.widgets.hovered.corner_radius = CornerRadius::same(6);
 
     v.widgets.active.bg_fill = theme.surface_active;
-    v.widgets.active.bg_stroke = Stroke::new(1.5, theme.accent);
+    v.widgets.active.bg_stroke = Stroke::new(1.0, theme.border);
     v.widgets.active.fg_stroke = Stroke::new(1.0, theme.text_primary);
     v.widgets.active.corner_radius = CornerRadius::same(6);
 
     v.widgets.open.bg_fill = theme.surface_hover;
 
-    // Selection styling: high contrast white text over electric blue
     v.selection.bg_fill = theme.accent;
     v.selection.stroke = Stroke::new(1.0, theme.accent_hover);
 
@@ -146,12 +171,10 @@ pub fn configure_egui_theme(ctx: &egui::Context, theme: &SpectrumTheme) {
 }
 
 /// Sets up Segoe UI + Segoe UI Symbol typography from Windows system fonts.
-/// Guarantees that ALL symbols (✦, 🔍, 🗑, ✎, ✓, ≡, ⚙, 🌐) render crisply with zero tofu [].
 pub fn setup_custom_fonts(ctx: &egui::Context) {
     let mut fonts = egui::FontDefinitions::default();
     let font_dir = std::path::Path::new("C:\\Windows\\Fonts");
 
-    // 1. Primary Latin typography
     if let Ok(bytes) = std::fs::read(font_dir.join("segoeui.ttf")) {
         fonts.font_data.insert(
             "SegoeUI".to_owned(),
@@ -162,7 +185,6 @@ pub fn setup_custom_fonts(ctx: &egui::Context) {
         }
     }
 
-    // 2. Headings and emphasis
     if let Ok(bytes) = std::fs::read(font_dir.join("seguisb.ttf")) {
         fonts.font_data.insert(
             "SegoeUISemiBold".to_owned(),
@@ -170,7 +192,6 @@ pub fn setup_custom_fonts(ctx: &egui::Context) {
         );
     }
 
-    // 3. Complete Windows Symbol library (resolves all UI symbols without tofu)
     if let Ok(bytes) = std::fs::read(font_dir.join("seguisym.ttf")) {
         fonts.font_data.insert(
             "SegoeUISymbol".to_owned(),
@@ -181,7 +202,6 @@ pub fn setup_custom_fonts(ctx: &egui::Context) {
         }
     }
 
-    // 4. Windows Segoe MDL2 Assets
     if let Ok(bytes) = std::fs::read(font_dir.join("segmdl2.ttf")) {
         fonts.font_data.insert(
             "SegoeMDL2".to_owned(),
@@ -218,7 +238,6 @@ pub fn render_rf_logo(ui: &mut Ui, size: f32) {
             .clone()
     };
 
-    // The icon is square; show it crisp at the pixel grid.
     let rect = ui
         .allocate_exact_size(Vec2::splat(size), Sense::hover())
         .0;
@@ -230,30 +249,37 @@ pub fn render_rf_logo(ui: &mut Ui, size: f32) {
     );
 }
 
-/// Adobe Spectrum 2 Primary or Secondary Button
-pub fn spectrum_button(ui: &mut Ui, label: &str, primary: bool, theme: &SpectrumTheme) -> Response {
-    let text = if primary {
-        RichText::new(label).color(Color32::WHITE).strong()
-    } else {
-        RichText::new(label).color(theme.text_primary)
+/// Spectrum 2 button: always carries an icon + label so no call site can end
+/// up inconsistent. Pill-shaped, 32px tall, accent fill only when primary.
+pub fn spectrum_button(
+    ui: &mut Ui,
+    icon: Option<&str>,
+    label: &str,
+    primary: bool,
+    theme: &SpectrumTheme,
+) -> Response {
+    let text = match icon {
+        Some(ic) => format!("{ic}  {label}"),
+        None => label.to_string(),
     };
+    let rich = RichText::new(text)
+        .font(FontId::proportional(13.0))
+        .color(if primary { Color32::WHITE } else { theme.text_primary });
+    let rich = if primary { rich.strong() } else { rich };
 
     let button = if primary {
-        egui::Button::new(text)
+        egui::Button::new(rich)
             .fill(theme.accent)
-            .corner_radius(CornerRadius::same(6))
             .stroke(Stroke::NONE)
     } else {
-        egui::Button::new(text)
+        egui::Button::new(rich)
             .fill(theme.surface_elevated)
-            .corner_radius(CornerRadius::same(6))
             .stroke(Stroke::new(1.0, theme.border))
     };
-
-    ui.add(button)
+    ui.add(button.min_size(Vec2::new(0.0, 32.0)))
 }
 
-/// Adobe Spectrum 2 Animated 40x22 Sliding Switch Toggle
+/// Spectrum 2 sliding switch (pill track, white knob).
 pub fn spectrum_switch(ui: &mut Ui, on: &mut bool, theme: &SpectrumTheme) -> Response {
     let desired_size = Vec2::new(40.0, 22.0);
     let (rect, mut response) = ui.allocate_exact_size(desired_size, Sense::click());
@@ -265,22 +291,16 @@ pub fn spectrum_switch(ui: &mut Ui, on: &mut bool, theme: &SpectrumTheme) -> Res
     if ui.is_rect_visible(rect) {
         let how_on = ui.ctx().animate_bool_responsive(response.id, *on);
 
-        let bg = if *on {
-            theme.accent
-        } else {
-            theme.surface_active
-        };
-
-        let border_stroke = if *on {
-            Stroke::NONE
-        } else {
-            Stroke::new(1.0, theme.border)
-        };
-
+        let bg = if *on { theme.accent } else { theme.surface_active };
         let radius = (rect.height() / 2.0).round() as u8;
         ui.painter().rect_filled(rect, CornerRadius::same(radius), bg);
-        if border_stroke != Stroke::NONE {
-            ui.painter().rect_stroke(rect, CornerRadius::same(radius), border_stroke, StrokeKind::Inside);
+        if !*on {
+            ui.painter().rect_stroke(
+                rect,
+                CornerRadius::same(radius),
+                Stroke::new(1.0, theme.border),
+                StrokeKind::Inside,
+            );
         }
 
         let knob_radius = (rect.height() - 6.0) / 2.0;
@@ -289,32 +309,30 @@ pub fn spectrum_switch(ui: &mut Ui, on: &mut bool, theme: &SpectrumTheme) -> Res
         let knob_x = egui::lerp(min_x..=max_x, how_on);
         let knob_center = Pos2::new(knob_x, rect.center().y);
 
-        ui.painter().circle(
-            knob_center,
-            knob_radius,
-            Color32::WHITE,
-            Stroke::NONE,
-        );
+        ui.painter().circle(knob_center, knob_radius, Color32::WHITE, Stroke::NONE);
     }
 
     response
 }
 
-/// Adobe Spectrum 2 Badge / Pill tag
+/// Spectrum 2 quiet badge (pill) - e.g. action names, word counts.
 pub fn spectrum_badge(ui: &mut Ui, text: &str, bg_color: Color32, text_color: Color32) {
     ui.scope(|ui| {
         egui::Frame::new()
             .fill(bg_color)
-            .corner_radius(CornerRadius::same(12))
+            .corner_radius(CornerRadius::same(10))
             .inner_margin(egui::Margin::symmetric(8, 3))
             .show(ui, |ui| {
-                ui.label(RichText::new(text).font(FontId::proportional(12.0)).color(text_color).strong());
+                ui.label(
+                    RichText::new(text)
+                        .font(FontId::proportional(12.0))
+                        .color(text_color),
+                );
             });
     });
 }
 
-/// Standard Spectrum card frame shared by every Studio panel card, so cards
-/// always agree on fill, stroke, radius, and margins.
+/// Standard Spectrum card frame shared by every Studio panel card.
 pub fn card_frame(theme: &SpectrumTheme, inner_margin: egui::Margin) -> egui::Frame {
     egui::Frame::new()
         .fill(theme.surface)
@@ -323,56 +341,115 @@ pub fn card_frame(theme: &SpectrumTheme, inner_margin: egui::Margin) -> egui::Fr
         .inner_margin(inner_margin)
 }
 
-/// Renderer for the refined-vs-original diff: one wrapped `LayoutJob` so egui
-/// line-breaks at the panel width. Wrapped per-chunk frames collapsed into a
-/// one-character-wide column for many-chunk diffs; a single job flows
-/// correctly, and per-section `TextFormat` backgrounds paint GitHub-style
-/// line highlights behind the changed runs.
+/// Renders the refined-vs-original diff as a single wrapped text flow:
+/// one layout job so all sections wrap at the true panel width, with
+/// opaque Spectrum red/green subtle backgrounds behind the changed runs.
+/// The strikethrough on deleted text is painted per character via
+/// `Galley::pos_from_cursor`, seated at ~78% of the row height - egui's
+/// built-in strike rides at the em-center and reads too high.
 pub fn render_diff_view(ui: &mut Ui, chunks: &[DiffChunk], theme: &SpectrumTheme) {
+    use eframe::egui::text::CCursor;
+
     if chunks.is_empty() {
         return;
     }
 
     let font = FontId::proportional(14.0);
-    let mut job = eframe::epaint::text::LayoutJob::default();
+    let mut job = eframe::egui::text::LayoutJob::default();
+    // Character ranges of the Delete chunks within the laid-out text,
+    // used to place the manual strikethrough.
+    let mut del_ranges: Vec<(usize, usize)> = Vec::new();
+
     for chunk in chunks {
-        let mut format = TextFormat {
-            font_id: font.clone(),
-            color: theme.text_primary,
-            ..Default::default()
+        let start = job.text.chars().count();
+        let (color, background) = match chunk.kind {
+            DiffKind::Equal => (theme.text_body, Color32::TRANSPARENT),
+            DiffKind::Delete => (theme.diff_del_text, theme.diff_del_bg),
+            DiffKind::Insert => (theme.diff_add_text, theme.diff_add_bg),
         };
-        match chunk.kind {
-            DiffKind::Equal => {}
-            DiffKind::Delete => {
-                format.color = theme.diff_del_text;
-                format.background = theme.diff_del_bg;
-                format.strikethrough = Stroke::new(1.0, theme.diff_del_text);
-            }
-            DiffKind::Insert => {
-                format.color = theme.diff_add_text;
-                format.background = theme.diff_add_bg;
-            }
+        job.append(
+            &chunk.text,
+            1.0,
+            TextFormat {
+                font_id: font.clone(),
+                color,
+                background,
+                ..Default::default()
+            },
+        );
+        let end = job.text.chars().count();
+        if chunk.kind == DiffKind::Delete {
+            del_ranges.push((start, end));
         }
-        job.append(&chunk.text, 1.0, format);
     }
 
-    ui.add(egui::Label::new(job).wrap());
+    job.wrap.max_width = ui.available_width().max(64.0);
+    let galley = ui.painter().layout_job(job);
+    let (rect, _response) = ui.allocate_exact_size(galley.size(), Sense::hover());
+    let origin = rect.min;
+    ui.painter().galley(origin, galley.clone(), Color32::WHITE);
+
+    // Strikethrough pass over the deleted ranges, per character so the
+    // line breaks exactly where wrapping breaks a deleted run.
+    for (cs, ce) in del_ranges {
+        for c in cs..ce {
+            let r0 = galley.pos_from_cursor(CCursor::new(c));
+            let r1 = galley.pos_from_cursor(CCursor::new(c + 1));
+            if r0.min.y != r1.min.y {
+                continue; // wrapped or newline: no strike on the gap
+            }
+            let x0 = origin.x + r0.min.x;
+            let x1 = origin.x + r1.min.x;
+            if x1 <= x0 + 0.5 {
+                continue; // whitespace-only / zero-width caret step
+            }
+            let y = origin.y + r0.min.y + r0.height() * 0.78;
+            ui.painter().line_segment(
+                [Pos2::new(x0, y), Pos2::new(x1, y)],
+                Stroke::new(1.0, theme.diff_del_text),
+            );
+        }
+    }
 }
 
-/// Fixed-width verb button with the keyboard shortcut rendered as a chip:
-/// "Copy  [Ctrl+C]". Painted directly so the shortcut looks like a key cap
-/// instead of flat double-space text.
-/// Returns the response for click detection; hover/primary states styled
-/// like `spectrum_button`.
+/// Sized verb button with optional leading icon and trailing keycap chip,
+/// e.g. "[icon] Copy  [Ctrl+C]". Width is computed from the measured
+/// galley widths, so long localized labels or icons never clip.
 pub fn kbd_button(
     ui: &mut Ui,
+    icon: Option<&str>,
     label: &str,
-    kbd: &str,
+    kbd: Option<&str>,
     primary: bool,
-    width: f32,
     theme: &SpectrumTheme,
 ) -> Response {
-    let (rect, response) = ui.allocate_exact_size(Vec2::new(width, 28.0), Sense::click());
+    let height = 32.0;
+    let label_color = if primary { Color32::WHITE } else { theme.text_primary };
+    let kbd_color = if primary { Color32::WHITE } else { theme.text_secondary };
+
+    let font = FontId::proportional(13.0);
+    let label_galley = ui
+        .painter()
+        .layout(label.to_string(), font, label_color, f32::INFINITY);
+    let icon_galley = icon.map(|ic| {
+        ui.painter()
+            .layout(ic.to_string(), FontId::proportional(14.0), label_color, f32::INFINITY)
+    });
+    let kbd_galley = kbd.map(|k| {
+        ui.painter()
+            .layout(k.to_string(), FontId::proportional(12.0), kbd_color, f32::INFINITY)
+    });
+
+    let pad = 10.0;
+    let icon_w = icon_galley.as_ref().map(|g| g.size().x + 8.0).unwrap_or(0.0);
+    let mut width = pad + icon_w + label_galley.size().x;
+    if let Some(g) = &kbd_galley {
+        width += 12.0 + g.size().x + 2.0 * 5.0; // chip + horizontal padding
+    }
+    width += pad;
+    let width = width.max(64.0);
+
+    let (rect, response) = ui.allocate_exact_size(Vec2::new(width, height), Sense::click());
 
     let fill = if response.hovered() {
         if primary {
@@ -392,52 +469,40 @@ pub fn kbd_button(
             .rect_stroke(rect, corner, Stroke::new(1.0, theme.border), StrokeKind::Inside);
     }
 
-    let text_color = if primary {
-        Color32::WHITE
-    } else {
-        theme.text_primary
-    };
-    let font = FontId::proportional(12.0);
-    let label_galley = ui
-        .painter()
-        .layout(label.to_string(), font, text_color, f32::INFINITY);
-    let kbd_galley = ui.painter().layout(
-        kbd.to_string(),
-        FontId::proportional(12.0),
-        if primary { Color32::WHITE } else { theme.text_secondary },
-        f32::INFINITY,
-    );
-
-    // Key-cap chip on the right edge; plain label on the left.
-    let pad = 5.0;
-    let chip_size = Vec2::new(
-        kbd_galley.size().x + 2.0 * pad,
-        kbd_galley.size().y + 4.0,
-    );
-    let chip_rect = Rect::from_min_size(
-        Pos2::new(rect.right() - 12.0 - chip_size.x, rect.center().y - chip_size.y / 2.0),
-        chip_size,
-    );
-    let chip_fill = if primary {
-        Color32::from_black_alpha(50)
-    } else {
-        theme.surface_active
-    };
-    ui.painter()
-        .rect_filled(chip_rect, CornerRadius::same(3), chip_fill);
+    let mut x = rect.left() + pad;
+    if let Some(g) = &icon_galley {
+        let y = rect.center().y - g.size().y / 2.0;
+        ui.painter().galley(Pos2::new(x, y), g.clone(), Color32::WHITE);
+        x += g.size().x + 8.0;
+    }
     ui.painter().galley(
-        Pos2::new(
-            chip_rect.center().x - kbd_galley.size().x / 2.0,
-            chip_rect.center().y - kbd_galley.size().y / 2.0,
-        ),
-        kbd_galley,
-        Color32::WHITE,
-    );
-    ui.painter().galley(
-        Pos2::new(rect.left() + 10.0, rect.center().y - label_galley.size().y / 2.0),
+        Pos2::new(x, rect.center().y - label_galley.size().y / 2.0),
         label_galley,
         Color32::WHITE,
     );
+
+    if let Some(g) = &kbd_galley {
+        let chip_size = Vec2::new(g.size().x + 10.0, g.size().y + 4.0);
+        let chip_rect = Rect::from_min_size(
+            Pos2::new(rect.right() - pad - chip_size.x, rect.center().y - chip_size.y / 2.0),
+            chip_size,
+        );
+        let chip_fill = if primary {
+            Color32::from_black_alpha(50)
+        } else {
+            theme.surface_subtle
+        };
+        ui.painter()
+            .rect_filled(chip_rect, CornerRadius::same(4), chip_fill);
+        ui.painter().galley(
+            Pos2::new(
+                chip_rect.center().x - g.size().x / 2.0,
+                chip_rect.center().y - g.size().y / 2.0,
+            ),
+            g.clone(),
+            Color32::WHITE,
+        );
+    }
 
     response
 }

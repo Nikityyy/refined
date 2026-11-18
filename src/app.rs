@@ -236,7 +236,7 @@ nonsense, which is a very serious problem for publishing.\n";
                             egui::Frame::new()
                                 .fill(spectrum_theme.surface)
                                 .stroke(Stroke::new(1.0, spectrum_theme.border))
-                                .corner_radius(CornerRadius::same(12))
+                                .corner_radius(CornerRadius::same(8))
                                 .shadow(egui::epaint::Shadow {
                                     offset: [0, 8],
                                     blur: 24,

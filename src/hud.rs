@@ -4,8 +4,8 @@ use crate::actions::{standard_languages, ActionItem};
 use crate::diff::{compute_diff, DiffChunk, DiffStats};
 use crate::groq::{complete_action, GroqConfig};
 use crate::history::HistoryEntry;
-use crate::theme::{icons, kbd_button, render_diff_view, spectrum_badge, spectrum_button, SpectrumTheme};
-use eframe::egui::{self, Color32, CornerRadius, FontId, Key, Pos2, RichText, Sense, Stroke, Ui};
+use crate::theme::{icons, kbd_button, render_diff_view, SpectrumTheme};
+use eframe::egui::{self, Color32, CornerRadius, FontId, Key, Pos2, RichText, Sense, Ui, Vec2};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::Arc;
@@ -155,8 +155,8 @@ impl Hud {
     pub fn desired_height(&self, action_count: usize) -> f32 {
         match &self.state {
             HudState::SelectingAction => {
-                let items_h = action_count as f32 * 46.0;
-                (96.0 + items_h).clamp(220.0, 460.0)
+                // One quiet header row (32) + single-line rows (34 incl. 2px gap).
+                (44.0 + action_count as f32 * 34.0).clamp(160.0, 460.0)
             }
             HudState::RewriteAsInput { .. } => 210.0,
             HudState::Processing { .. } => 150.0,
@@ -308,7 +308,9 @@ impl Hud {
     }
 
     /// Renders the action list rows; returns the index of a row that was
-    /// clicked so the caller can activate it.
+    /// clicked so the caller can activate it. Minimal single-line rows:
+    /// fixed-slot icon, 14px name, keycap on the right; the description is
+    /// available on hover so the palette stays visually quiet.
     pub fn render_action_list(
         &mut self,
         ui: &mut Ui,
@@ -316,59 +318,88 @@ impl Hud {
         theme: &SpectrumTheme,
     ) -> Option<usize> {
         let mut clicked_idx = None;
+        let row_h = 32.0;
+        let width = ui.available_width();
+
         for (idx, action) in actions.iter().enumerate() {
             let is_selected = idx == self.selected_index;
-            let bg_color = if is_selected {
+            let (rect, response) =
+                ui.allocate_exact_size(Vec2::new(width, row_h), Sense::click());
+            if response.clicked() {
+                clicked_idx = Some(idx);
+            }
+
+            // Spectrum selection is a quiet fill, never an accent outline.
+            let bg = if is_selected || response.hovered() {
                 theme.surface_hover
             } else {
                 Color32::TRANSPARENT
             };
+            ui.painter()
+                .rect_filled(rect, CornerRadius::same(4), bg);
 
-            let frame = egui::Frame::new()
-                .fill(bg_color)
-                .corner_radius(CornerRadius::same(6))
-                .stroke(if is_selected {
-                    Stroke::new(1.0, theme.accent)
-                } else {
-                    Stroke::NONE
-                })
-                .inner_margin(egui::Margin::symmetric(10, 6));
+            let pad = 10.0;
 
-            let response = frame.show(ui, |ui| {
-                ui.horizontal(|ui| {
-                    ui.label(
-                        RichText::new(&action.icon)
-                            .font(FontId::proportional(15.0))
-                            .color(if is_selected { theme.accent } else { theme.text_secondary }),
-                    );
-                    ui.add_space(4.0);
-                    ui.vertical(|ui| {
-                        ui.label(
-                            RichText::new(&action.name)
-                                .font(FontId::proportional(13.0))
-                                .color(theme.text_primary)
-                                .strong(),
-                        );
-                        ui.label(
-                            RichText::new(&action.description)
-                                .font(FontId::proportional(12.0))
-                                .color(theme.text_secondary),
-                        );
-                    });
+            // Icon in a fixed slot so every glyph optically aligns.
+            let icon_galley = ui.painter().layout(
+                action.icon.clone(),
+                FontId::proportional(16.0),
+                if is_selected { theme.accent_visual } else { theme.text_secondary },
+                f32::INFINITY,
+            );
+            let icon_cx = rect.left() + pad + 10.0;
+            ui.painter().galley(
+                Pos2::new(
+                    icon_cx - icon_galley.size().x / 2.0,
+                    rect.center().y - icon_galley.size().y / 2.0,
+                ),
+                icon_galley,
+                Color32::WHITE,
+            );
 
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if !action.shortcut.is_empty() {
-                            spectrum_badge(ui, &action.shortcut, theme.surface_elevated, theme.text_secondary);
-                        }
-                    });
-                });
-            });
+            let name_galley = ui.painter().layout(
+                action.name.clone(),
+                FontId::proportional(14.0),
+                theme.text_primary,
+                f32::INFINITY,
+            );
+            ui.painter().galley(
+                Pos2::new(
+                    rect.left() + pad + 20.0 + 8.0,
+                    rect.center().y - name_galley.size().y / 2.0,
+                ),
+                name_galley,
+                Color32::WHITE,
+            );
 
-            let rect = response.response.rect;
-            let interact = ui.interact(rect, ui.scope_id().with(idx), Sense::click());
-            if interact.clicked() {
-                clicked_idx = Some(idx);
+            // Keycap on the right edge.
+            if !action.shortcut.is_empty() {
+                let cap_galley = ui.painter().layout(
+                    action.shortcut.clone(),
+                    FontId::proportional(12.0),
+                    theme.text_secondary,
+                    f32::INFINITY,
+                );
+                let cap_w = cap_galley.size().x + 10.0;
+                let cap_h = cap_galley.size().y + 4.0;
+                let cap_rect = egui::Rect::from_min_size(
+                    Pos2::new(rect.right() - pad - cap_w, rect.center().y - cap_h / 2.0),
+                    Vec2::new(cap_w, cap_h),
+                );
+                ui.painter()
+                    .rect_filled(cap_rect, CornerRadius::same(4), theme.surface_subtle);
+                ui.painter().galley(
+                    Pos2::new(
+                        cap_rect.center().x - cap_galley.size().x / 2.0,
+                        cap_rect.center().y - cap_galley.size().y / 2.0,
+                    ),
+                    cap_galley,
+                    Color32::WHITE,
+                );
             }
+
+            response.on_hover_text(&action.description);
+            ui.add_space(2.0);
         }
         clicked_idx
     }
@@ -391,55 +422,83 @@ impl Hud {
             return;
         }
 
-        // Header
+        // Quiet header: brand left; language, Studio, close as icon-only
+        // controls right. No word count, no separator - the palette stays
+        // minimal; the diff screen already shows the word delta.
         ui.horizontal(|ui| {
             ui.label(
-                RichText::new("✦ Refined")
+                RichText::new("Refined")
                     .font(FontId::proportional(14.0))
-                    .color(theme.accent)
+                    .color(theme.text_primary)
                     .strong(),
-            );
-            ui.label(
-                RichText::new(format!("({} words)", self.original_text.split_whitespace().count()))
-                    .font(FontId::proportional(12.0))
-                    .color(theme.text_secondary),
             );
 
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui.add(egui::Button::new(RichText::new(icons::CLOSE).color(theme.text_secondary)).frame(false)).clicked() {
+                if ui
+                    .add(egui::Button::new(
+                        RichText::new(icons::CLOSE)
+                            .font(FontId::proportional(13.0))
+                            .color(theme.text_secondary),
+                    ))
+                    .on_hover_text("Close (Esc)")
+                    .clicked()
+                {
                     self.close();
                 }
 
-                if ui.add(egui::Button::new(RichText::new(format!("{} Studio", icons::SETTINGS)).font(FontId::proportional(12.0)).color(theme.text_secondary)).frame(false)).clicked() {
+                if ui
+                    .add(egui::Button::new(
+                        RichText::new(icons::SETTINGS)
+                            .font(FontId::proportional(13.0))
+                            .color(theme.text_secondary),
+                    ))
+                    .on_hover_text("Open Studio")
+                    .clicked()
+                {
                     on_open_studio();
                     self.close();
                 }
 
-                // Language dropdown
+                let lang_label = standard_languages()
+                    .iter()
+                    .find(|l| l.code == *selected_language)
+                    .map(|l| l.label.clone())
+                    .unwrap_or_else(|| selected_language.clone());
+
                 egui::ComboBox::from_id_salt("hud_language_select")
-                    .selected_text(RichText::new(format!("{} {}", icons::WORLD, selected_language)).font(FontId::proportional(12.0)))
-                    .width(118.0)
+                    .selected_text(
+                        RichText::new(icons::WORLD)
+                            .font(FontId::proportional(13.0))
+                            .color(theme.text_secondary),
+                    )
+                    .width(36.0)
                     .show_ui(ui, |ui| {
                         for lang in standard_languages() {
-                            if ui.selectable_label(*selected_language == lang.code, &lang.label).clicked() {
+                            if ui
+                                .selectable_label(*selected_language == lang.code, &lang.label)
+                                .clicked()
+                            {
                                 *selected_language = lang.code.clone();
                             }
                         }
-                    });
+                    })
+                    .response
+                    .on_hover_text(format!("Language: {lang_label}"));
             });
         });
 
         if *selected_language == "custom" {
-            ui.add_space(4.0);
             ui.horizontal(|ui| {
-                ui.label(RichText::new("Language:").font(FontId::proportional(12.0)).color(theme.text_secondary));
+                ui.label(
+                    RichText::new("Language:")
+                        .font(FontId::proportional(12.0))
+                        .color(theme.text_secondary),
+                );
                 ui.text_edit_singleline(custom_language);
             });
         }
 
-        ui.add_space(6.0);
-        ui.separator();
-        ui.add_space(6.0);
+        ui.add_space(8.0);
 
         // Error message alert if present
         if let Some(ref err) = self.error_message {
@@ -537,10 +596,11 @@ impl Hud {
 
                 ui.add_space(8.0);
                 ui.horizontal(|ui| {
-                    if spectrum_button(ui, "Rewrite [Enter]", true, theme).clicked() {
+                    ui.spacing_mut().item_spacing = Vec2::new(8.0, 0.0);
+                    if kbd_button(ui, None, "Rewrite", Some("Enter"), true, theme).clicked() {
                         submitted = true;
                     }
-                    if spectrum_button(ui, "Cancel [Esc]", false, theme).clicked() {
+                    if kbd_button(ui, None, "Cancel", Some("Esc"), false, theme).clicked() {
                         self.state = HudState::SelectingAction;
                     }
                 });
@@ -551,12 +611,18 @@ impl Hud {
                 }
             }
             HudState::Processing { action_name } => {
+                let model_short = groq_config
+                    .model
+                    .split('/')
+                    .next_back()
+                    .unwrap_or(&groq_config.model)
+                    .to_string();
                 ui.vertical_centered(|ui| {
                     ui.add_space(8.0);
                     ui.spinner();
                     ui.add_space(8.0);
                     ui.label(
-                        RichText::new(format!("Refining with {}...", groq_config.model))
+                        RichText::new(format!("Refining with {model_short}..."))
                             .font(FontId::proportional(13.0))
                             .color(theme.text_primary)
                             .strong(),
@@ -645,14 +711,17 @@ impl Hud {
 
                 ui.add_space(10.0);
                 ui.horizontal(|ui| {
-                    if kbd_button(ui, &format!("{} Copy", icons::COPY), "Ctrl+C", false, 118.0, theme)
+                    // Every verb carries an icon + label + keycap chip: one
+                    // consistent pattern across the app.
+                    ui.spacing_mut().item_spacing = Vec2::new(8.0, 0.0);
+                    if kbd_button(ui, Some(icons::COPY), "Copy", Some("Ctrl+C"), false, theme)
                         .clicked()
                         || (ctx.input(|i| i.modifiers.command && i.key_pressed(Key::C)))
                     {
                         crate::clipboard::set_clipboard_text(refined_text);
                     }
 
-                    if kbd_button(ui, "Undo", "Ctrl+Z", false, 118.0, theme)
+                    if kbd_button(ui, Some(icons::REFRESH), "Undo", Some("Ctrl+Z"), false, theme)
                         .clicked()
                         || (ctx.input(|i| i.modifiers.command && i.key_pressed(Key::Z)))
                     {
@@ -661,7 +730,9 @@ impl Hud {
                     }
 
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if kbd_button(ui, "Done", "Esc", true, 118.0, theme).clicked() {
+                        if kbd_button(ui, Some(icons::CHECK_MARK), "Done", Some("Esc"), true, theme)
+                            .clicked()
+                        {
                             should_close.set(true);
                         }
                     });

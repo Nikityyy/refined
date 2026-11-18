@@ -1,7 +1,7 @@
 //! Statistics aggregation and insights for Refined study sessions.
 
 use crate::history::HistoryEntry;
-use chrono::{Datelike, Local};
+use chrono::Local;
 use std::collections::HashMap;
 
 #[derive(Debug, Clone, Default)]
@@ -61,7 +61,7 @@ pub fn calculate_stats(history: &[HistoryEntry]) -> AggregatedStats {
             .iter()
             .filter(|e| e.timestamp.date_naive() == date)
             .count();
-        let label = format!("{:02}.{:02}", date.day(), date.month());
+        let label = date.format("%b %d").to_string();
         daily_counts.push((label, count));
     }
 

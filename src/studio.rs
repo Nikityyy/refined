@@ -8,7 +8,8 @@ use crate::stats::calculate_stats;
 use crate::store::{Store, ThemeMode};
 use crate::theme::{card_frame, icons, render_diff_view, render_rf_logo, spectrum_badge, spectrum_button, spectrum_switch, SpectrumTheme};
 use eframe::egui::{
-    self, Align, Align2, Color32, CornerRadius, FontId, Key, Layout, RichText, ScrollArea, Sense, Stroke, Ui, Vec2,
+    self, Align, Align2, Color32, CornerRadius, FontId, Key, Layout, Pos2, Rect, RichText,
+    ScrollArea, Sense, Stroke, Ui, Vec2,
 };
 
 /// True when Ctrl is held and the given key was pressed this frame.
@@ -152,13 +153,15 @@ impl Studio {
 
             for (tab, label, shortcut) in tabs {
                 let is_active = self.current_tab == tab;
+                // Spectrum navigation selection is a neutral fill; the accent
+                // stays reserved for primary actions.
                 let btn = if is_active {
-                    egui::Button::new(RichText::new(label).color(Color32::WHITE).strong())
-                        .fill(theme.accent)
+                    egui::Button::new(RichText::new(label).font(FontId::proportional(13.0)).color(theme.text_primary).strong())
+                        .fill(theme.surface_hover)
                         .corner_radius(CornerRadius::same(6))
                         .stroke(Stroke::NONE)
                 } else {
-                    egui::Button::new(RichText::new(label).color(theme.text_secondary))
+                    egui::Button::new(RichText::new(label).font(FontId::proportional(13.0)).color(theme.text_secondary))
                         .fill(Color32::TRANSPARENT)
                         .corner_radius(CornerRadius::same(6))
                         .stroke(Stroke::NONE)
@@ -194,7 +197,8 @@ impl Studio {
 
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 if !store.history.is_empty()
-                    && spectrum_button(ui, "Clear All History", false, theme).clicked()
+                    && spectrum_button(ui, Some(icons::TRASH), "Clear All History", false, theme)
+                        .clicked()
                 {
                     store.clear_history();
                 }
@@ -282,7 +286,9 @@ impl Studio {
             .auto_shrink([false, false])
             .show(ui, |ui| {
                 ui.set_width(ui.available_width());
-                ui.spacing_mut().item_spacing = Vec2::new(0.0, 8.0);
+                // Controls inside cards inherit this spacing; x=0 rendered
+                // badges and buttons flush against each other.
+                ui.spacing_mut().item_spacing = Vec2::new(8.0, 8.0);
 
                 for entry in filtered {
                     let is_expanded = self.expanded_history_id.as_deref() == Some(&entry.id);
@@ -293,7 +299,12 @@ impl Studio {
 
                             // Item Header
                             ui.horizontal(|ui| {
-                                spectrum_badge(ui, &entry.action_name, theme.accent_subtle, theme.accent);
+                                spectrum_badge(
+                                    ui,
+                                    &entry.action_name,
+                                    theme.accent_badge_bg,
+                                    theme.accent_badge_text,
+                                );
                                 ui.label(
                                     RichText::new(entry.timestamp.format("%b %d, %H:%M").to_string())
                                         .font(FontId::proportional(12.0))
@@ -310,10 +321,9 @@ impl Studio {
                                 };
                                 spectrum_badge(
                                     ui,
-                                    // Clean right arrow → (no mojibake)
                                     &format!("{} → {} words{}", entry.stats.original_words, entry.stats.refined_words, delta_str),
-                                    theme.surface_elevated,
-                                    theme.text_secondary,
+                                    theme.surface_subtle,
+                                    theme.text_primary,
                                 );
 
                                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
@@ -321,11 +331,21 @@ impl Studio {
                                         delete_id = Some(entry.id.clone());
                                     }
 
-                                    if spectrum_button(ui, if is_expanded { "Hide changes" } else { "Show changes" }, false, theme).clicked() {
+                                    if spectrum_button(
+                                        ui,
+                                        Some(icons::EYE),
+                                        if is_expanded { "Hide changes" } else { "Show changes" },
+                                        false,
+                                        theme,
+                                    )
+                                    .clicked()
+                                    {
                                         toggle_diff_id = Some(entry.id.clone());
                                     }
 
-                                    if spectrum_button(ui, &format!("{} Copy", icons::COPY), false, theme).clicked() {
+                                    if spectrum_button(ui, Some(icons::COPY), "Copy", false, theme)
+                                        .clicked()
+                                    {
                                         crate::clipboard::set_clipboard_text(&entry.refined_text);
                                     }
                                 });
@@ -401,59 +421,52 @@ impl Studio {
     ) {
         ui.add_space(12.0);
 
-        // 1. Responsive metric grid: 4 across on wide windows, 2x2 when narrow.
-        // Card widths are computed once from the panel width so cards never
-        // overflow, and every card in the grid shares the exact same size.
+        // 1. Metric cards. Widths come from the true available width minus
+        // gaps AND the frames' painted horizontal margins, so the row can
+        // never clip off the window edge. Wide windows get 4 across,
+        // narrow windows 2. Values are quiet neutral numbers - Adobe
+        // dashboards reserve color for actions, not digits.
         let available_w = ui.available_width();
         let gap = 12.0;
-        let min_card_w = 182.0;
-        let side_margin = 28.0; // inner_margin(14) * 2, painted outside set_width
-        let per_row = if available_w >= min_card_w * 4.0 + gap * 3.0 { 4 } else { 2 };
+        let side_margin = 28.0; // inner_margin(14) painted on both sides
+        let per_row = if available_w >= 182.0 * 4.0 + gap * 3.0 + side_margin * 4.0 {
+            4
+        } else {
+            2
+        };
         let card_w = ((available_w - gap * (per_row as f32 - 1.0) - side_margin * per_row as f32)
             / per_row as f32)
             .floor()
-            .max(min_card_w);
+            .max(96.0);
 
-        let metrics: Vec<(&str, String, String, Color32)> = vec![
+        let metrics: Vec<(&str, String, String)> = vec![
             (
-                "WORDS REFINED",
+                "Words refined",
                 fmt_thousands(stats.total_refined_words),
                 format!("from {} original", fmt_thousands(stats.total_original_words)),
-                theme.accent,
             ),
             (
-                "REFINEMENTS",
+                "Refinements",
                 fmt_thousands(stats.total_refinements),
                 "total AI operations".to_string(),
-                theme.purple,
             ),
             (
-                "EDIT TIME SAVED",
+                "Edit time saved",
                 format!("{:.1} min", stats.estimated_minutes_saved),
                 "manual rework avoided".to_string(),
-                Color32::from_rgb(0x22, 0xC5, 0x5E),
             ),
             (
-                "AVG LATENCY",
+                "Avg latency",
                 format!("{} ms", fmt_thousands(stats.average_latency_ms as usize)),
                 "Groq inference speed".to_string(),
-                theme.amber,
             ),
         ];
 
         for row in metrics.chunks(per_row) {
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing = Vec2::new(gap, 0.0);
-                for (title, value, subtitle, accent_color) in row {
-                    render_metric_card(
-                        ui,
-                        title,
-                        value.as_str(),
-                        subtitle.as_str(),
-                        *accent_color,
-                        card_w,
-                        theme,
-                    );
+                for (title, value, subtitle) in row {
+                    render_metric_card(ui, title, value.as_str(), subtitle.as_str(), card_w, theme);
                 }
             });
             ui.add_space(gap);
@@ -473,117 +486,137 @@ impl Studio {
             // Left Column: Interactive 7-Day Activity Chart
             card_frame(theme, egui::Margin::same(16))
                 .show(ui, |ui| {
-                    ui.set_width(left_w);
-                    ui.set_height(240.0);
+                    // A Frame inside a horizontal parent inherits that layout,
+                    // which previously sandwiched header, chart, and labels
+                    // into one row. The body must be vertical.
+                    ui.vertical(|ui| {
+                        ui.set_width(left_w);
+                        ui.set_min_height(250.0);
 
-                    ui.label(
-                        RichText::new("Refinements per day")
-                            .font(FontId::proportional(14.0))
-                            .color(theme.text_primary)
-                            .strong(),
-                    );
-                    ui.label(
-                        RichText::new("How many refinements you ran each day")
-                            .font(FontId::proportional(12.0))
-                            .color(theme.text_secondary),
-                    );
+                        ui.label(
+                            RichText::new("Refinements per day")
+                                .font(FontId::proportional(14.0))
+                                .color(theme.text_primary)
+                                .strong(),
+                        );
+                        ui.label(
+                            RichText::new("How many refinements you ran each day")
+                                .font(FontId::proportional(12.0))
+                                .color(theme.text_secondary),
+                        );
 
-                    ui.add_space(16.0);
+                        ui.add_space(16.0);
 
-                    // Real interactive 7-day Bar Chart
-                    if stats.total_refinements == 0 {
-                        ui.vertical(|ui| {
-                            ui.add_space(26.0);
+                        if stats.total_refinements == 0 {
+                            ui.add_space(36.0);
                             ui.label(
                                 RichText::new("Refinements will appear here once you use Alt+Q.")
                                     .font(FontId::proportional(12.0))
                                     .color(theme.text_secondary),
                             );
-                        });
-                    } else {
-                        let max_count = stats.daily_counts.iter().map(|(_, c)| *c).max().unwrap_or(1).max(1) as f32;
-
-                        ui.horizontal(|ui| {
-                            let bar_slot_w = left_w / 7.0;
-                            ui.spacing_mut().item_spacing = Vec2::new(0.0, 0.0);
-
-                            for (day, count) in &stats.daily_counts {
-                                ui.allocate_ui_with_layout(
-                                    Vec2::new(bar_slot_w, 150.0),
-                                    Layout::top_down(Align::Center),
-                                    |ui| {
-                                        let ratio = (*count as f32 / max_count).clamp(0.04, 1.0);
-                                        let bar_h = 92.0 * ratio;
-
-                                    ui.add_space(100.0 - bar_h);
-
-                                    // Bar container
-                                    let (bar_rect, bar_resp) = ui.allocate_exact_size(
-                                        Vec2::new(26.0, bar_h),
-                                        Sense::hover(),
-                                    );
-
-                                    let bar_color = if *count > 0 {
-                                        if bar_resp.hovered() { theme.accent_hover } else { theme.accent }
-                                    } else {
-                                        theme.surface_elevated
-                                    };
-
-                                    ui.painter().rect_filled(
-                                        bar_rect,
-                                        CornerRadius::same(4),
-                                        bar_color,
-                                    );
-
-                                    bar_resp.on_hover_ui(|ui| {
-                                        ui.label(RichText::new(format!("{day}: {count} refinements")).strong());
-                                    });
-
-                                    ui.add_space(6.0);
-                                    ui.label(
-                                        RichText::new(format!("{count}"))
-                                            .font(FontId::proportional(12.0))
-                                            .color(if *count > 0 { theme.text_primary } else { theme.text_tertiary })
-                                            .strong(),
-                                    );
-                                    ui.label(
-                                        RichText::new(day)
-                                            .font(FontId::proportional(12.0))
-                                            .color(theme.text_secondary),
-                                    );
-                                },
-                            );
+                            return;
                         }
-                        });
-                    }
+
+                        // Bars grow from a shared baseline; the count rides
+                        // above the bar, the day label below it.
+                        let max_count = stats
+                            .daily_counts
+                            .iter()
+                            .map(|(_, c)| *c)
+                            .max()
+                            .unwrap_or(1)
+                            .max(1) as f32;
+                        let plot_h = 120.0;
+                        let label_band = 22.0;
+                        let (plot_rect, _) = ui.allocate_exact_size(
+                            Vec2::new(ui.available_width(), plot_h + label_band),
+                            Sense::hover(),
+                        );
+                        let plot_w = plot_rect.width();
+                        let slot = plot_w / 7.0;
+                        let baseline = plot_rect.bottom() - label_band;
+
+                        for (i, (day, count)) in stats.daily_counts.iter().enumerate() {
+                            let ratio = (*count as f32 / max_count).clamp(0.04, 1.0);
+                            let bar_h = plot_h * ratio;
+                            let bar_w = 26.0_f32.min(slot - 8.0);
+                            let cx = plot_rect.left() + slot * (i as f32 + 0.5);
+                            let bar_rect = Rect::from_min_max(
+                                Pos2::new(cx - bar_w / 2.0, baseline - bar_h),
+                                Pos2::new(cx + bar_w / 2.0, baseline),
+                            );
+                            let bar_color = if *count > 0 {
+                                theme.accent
+                            } else {
+                                theme.surface_active
+                            };
+                            ui.painter()
+                                .rect_filled(bar_rect, CornerRadius::same(4), bar_color);
+
+                            let count_galley = ui.painter().layout(
+                                format!("{count}"),
+                                FontId::proportional(12.0),
+                                if *count > 0 { theme.text_primary } else { theme.text_tertiary },
+                                f32::INFINITY,
+                            );
+                            ui.painter().galley(
+                                Pos2::new(
+                                    cx - count_galley.size().x / 2.0,
+                                    bar_rect.top() - count_galley.size().y - 3.0,
+                                ),
+                                count_galley,
+                                Color32::WHITE,
+                            );
+
+                            let day_galley = ui.painter().layout(
+                                day.clone(),
+                                FontId::proportional(12.0),
+                                theme.text_secondary,
+                                f32::INFINITY,
+                            );
+                            ui.painter().galley(
+                                Pos2::new(cx - day_galley.size().x / 2.0, baseline + 4.0),
+                                day_galley,
+                                Color32::WHITE,
+                            );
+
+                            ui.interact(bar_rect, ui.scope_id().with(("bar", day)), Sense::hover())
+                                .on_hover_text(format!("{day}: {count} refinements"));
+                        }
+                    });
                 });
 
             // Right Column: Action Usage Distribution
             card_frame(theme, egui::Margin::same(16))
                 .show(ui, |ui| {
-                    ui.set_width(right_w);
-                    ui.set_height(240.0);
+                    ui.vertical(|ui| {
+                        ui.set_width(right_w);
+                        ui.set_min_height(250.0);
 
-                    ui.label(
-                        RichText::new("Action Distribution")
-                            .font(FontId::proportional(14.0))
-                            .color(theme.text_primary)
-                            .strong(),
-                    );
-                    ui.label(
-                        RichText::new("How often each action was used")
-                            .font(FontId::proportional(12.0))
-                            .color(theme.text_secondary),
-                    );
+                        ui.label(
+                            RichText::new("Action distribution")
+                                .font(FontId::proportional(14.0))
+                                .color(theme.text_primary)
+                                .strong(),
+                        );
+                        ui.label(
+                            RichText::new("How often each action was used")
+                                .font(FontId::proportional(12.0))
+                                .color(theme.text_secondary),
+                        );
 
-                    ui.add_space(12.0);
+                        ui.add_space(12.0);
 
-                    if stats.action_counts.is_empty() {
-                        ui.vertical_centered(|ui| {
+                        if stats.action_counts.is_empty() {
                             ui.add_space(40.0);
-                            ui.label(RichText::new("No actions recorded yet.").color(theme.text_secondary));
-                        });
-                    } else {
+                            ui.label(
+                                RichText::new("No actions recorded yet.")
+                                    .font(FontId::proportional(12.0))
+                                    .color(theme.text_secondary),
+                            );
+                            return;
+                        }
+
                         let total = stats.total_refinements.max(1) as f32;
                         let mut sorted_actions: Vec<(String, usize)> =
                             stats.action_counts.iter().map(|(k, v)| (k.clone(), *v)).collect();
@@ -592,7 +625,7 @@ impl Studio {
                         for (action_name, count) in sorted_actions.iter().take(5) {
                             let pct = (*count as f32 / total) * 100.0;
                             ui.horizontal(|ui| {
-                                ui.label(RichText::new(action_name).font(FontId::proportional(12.0)).strong().color(theme.text_primary));
+                                ui.label(RichText::new(action_name).font(FontId::proportional(12.0)).color(theme.text_primary));
                                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                                     ui.label(RichText::new(format!("{count} ({pct:.0}%)")).font(FontId::proportional(12.0)).color(theme.text_secondary));
                                 });
@@ -606,7 +639,7 @@ impl Studio {
                             );
                             ui.add_space(4.0);
                         }
-                    }
+                    });
                 });
         });
     }
@@ -621,16 +654,20 @@ impl Studio {
             );
 
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                if spectrum_button(ui, "+ Add Custom Action", true, theme).clicked() {
+                if spectrum_button(ui, Some(icons::ADD), "Add Custom Action", true, theme)
+                    .clicked()
+                {
                     self.new_action_dialog_open = true;
                     self.new_action_name.clear();
                     self.new_action_desc.clear();
-                    self.new_action_icon = "✨".to_string();
+                    self.new_action_icon = "E70F".to_string();
                     self.new_action_shortcut.clear();
                     self.new_action_prompt.clear();
                 }
 
-                if spectrum_button(ui, "Reset All to Defaults", false, theme).clicked() {
+                if spectrum_button(ui, Some(icons::REFRESH), "Reset All to Defaults", false, theme)
+                    .clicked()
+                {
                     store.reset_all_actions();
                 }
             });
@@ -666,7 +703,8 @@ impl Studio {
 
                         ui.add_space(10.0);
                         ui.label(RichText::new("Icon:").font(FontId::proportional(12.0)).color(theme.text_secondary));
-                        ui.add_sized([40.0, 24.0], egui::TextEdit::singleline(&mut self.new_action_icon).align(Align2::LEFT_CENTER));
+                        ui.add_sized([60.0, 24.0], egui::TextEdit::singleline(&mut self.new_action_icon).align(Align2::LEFT_CENTER).hint_text("e.g. E70F"))
+                            .on_hover_text("A Segoe MDL2 icon codepoint, e.g. E70F");
 
                         ui.add_space(10.0);
                         ui.label(RichText::new("Shortcut:").font(FontId::proportional(12.0)).color(theme.text_secondary));
@@ -689,15 +727,29 @@ impl Studio {
 
                     ui.add_space(8.0);
                     ui.horizontal(|ui| {
-                        if spectrum_button(ui, "Save Action", true, theme).clicked() {
+                        if spectrum_button(ui, Some(icons::SAVE), "Save Action", true, theme)
+                            .clicked()
+                        {
                             let name = self.new_action_name.trim().to_string();
-                            if !name.is_empty() {
+                            // Custom icons must be real Segoe MDL2 codepoints,
+                            // or the palette falls back to tofu/emoji glyphs.
+                            let icon_valid =
+                                mdl2_codepoint(self.new_action_icon.trim()).is_some();
+                            if !name.is_empty() && !icon_valid {
+                                self.models_status_msg = Some((
+                                    "Pick a Segoe MDL2 icon code, e.g. E70F (see the tooltip)."
+                                        .to_string(),
+                                    false,
+                                ));
+                            } else if !name.is_empty() {
                                 let id = name.to_lowercase().replace(' ', "_");
                                 let action = ActionItem {
                                     id,
                                     name,
                                     description: self.new_action_desc.trim().to_string(),
-                                    icon: if self.new_action_icon.trim().is_empty() { "✨".to_string() } else { self.new_action_icon.trim().to_string() },
+                                    icon: mdl2_codepoint(self.new_action_icon.trim())
+                                        .map(|cp| char::from_u32(cp).unwrap().to_string())
+                                        .unwrap_or_else(|| self.new_action_icon.trim().to_string()),
                                     shortcut: self.new_action_shortcut.trim().to_string(),
                                     prompt_instruction: self.new_action_prompt.trim().to_string(),
                                     default_instruction: self.new_action_prompt.trim().to_string(),
@@ -709,7 +761,9 @@ impl Studio {
                             }
                         }
 
-                        if spectrum_button(ui, "Cancel", false, theme).clicked() {
+                        if spectrum_button(ui, Some(icons::CLOSE), "Cancel", false, theme)
+                            .clicked()
+                        {
                             self.new_action_dialog_open = false;
                         }
                     });
@@ -726,7 +780,7 @@ impl Studio {
             .auto_shrink([false, false])
             .show(ui, |ui| {
                 ui.set_width(ui.available_width());
-                ui.spacing_mut().item_spacing = Vec2::new(0.0, 10.0);
+                ui.spacing_mut().item_spacing = Vec2::new(8.0, 10.0);
 
                 let actions = &mut store.settings.actions;
                 for action in actions.iter_mut() {
@@ -748,7 +802,7 @@ impl Studio {
                                 );
 
                                 if !action.is_builtin {
-                                    spectrum_badge(ui, "Custom", theme.accent_subtle, theme.accent);
+                                    spectrum_badge(ui, "Custom", theme.accent_badge_bg, theme.accent_badge_text);
                                 }
                                 if action.is_modified() {
                                     spectrum_badge(ui, "Modified", theme.diff_add_bg, theme.diff_add_text);
@@ -762,13 +816,13 @@ impl Studio {
                                     }
 
                                     if action.is_modified() {
-                                        if spectrum_button(ui, "Reset to Default", false, theme).clicked() {
+                                        if spectrum_button(ui, Some(icons::REFRESH), "Reset to Default", false, theme).clicked() {
                                             reset_action_id = Some(action.id.clone());
                                         }
                                     }
 
                                     if !action.shortcut.is_empty() {
-                                        spectrum_badge(ui, &format!("Key: {}", action.shortcut), theme.surface_elevated, theme.text_secondary);
+                                        spectrum_badge(ui, &format!("Key: {}", action.shortcut), theme.surface_subtle, theme.text_primary);
                                     }
                                 });
                             });
@@ -858,13 +912,17 @@ impl Studio {
                         }
 
                         // Fixed 64px width for Show/Hide button to eliminate layout shifts
-                        let toggle_text = if self.show_api_key { "Hide" } else { "Show" };
-                        if ui.add_sized([64.0, 28.0], egui::Button::new(RichText::new(toggle_text).color(theme.text_primary)).fill(theme.surface_elevated).stroke(Stroke::new(1.0, theme.border)).corner_radius(CornerRadius::same(6))).clicked() {
+                        let toggle_text = if self.show_api_key {
+                            format!("{} Hide", icons::EYE)
+                        } else {
+                            format!("{} Show", icons::EYE)
+                        };
+                        if ui.add_sized([64.0, 28.0], egui::Button::new(RichText::new(toggle_text).font(FontId::proportional(12.0)).color(theme.text_primary)).fill(theme.surface_elevated).stroke(Stroke::new(1.0, theme.border)).corner_radius(CornerRadius::same(6))).clicked() {
                             self.show_api_key = !self.show_api_key;
                         }
 
                         // Fixed 170px width for Fetch Models button
-                        if ui.add_sized([170.0, 28.0], egui::Button::new(RichText::new("Fetch Models from Groq").color(Color32::WHITE).strong()).fill(theme.accent).stroke(Stroke::NONE).corner_radius(CornerRadius::same(6))).clicked() {
+                        if ui.add_sized([170.0, 28.0], egui::Button::new(RichText::new(format!("{}  Fetch Models from Groq", icons::DOWNLOAD)).font(FontId::proportional(12.0)).color(Color32::WHITE).strong()).fill(theme.accent).stroke(Stroke::NONE).corner_radius(CornerRadius::same(6))).clicked() {
                             let key = store.settings.groq.api_key.clone();
                             self.fetch_models(&key);
                         }
@@ -958,33 +1016,44 @@ impl Studio {
 
                     ui.add_space(12.0);
 
-                    // Temperature slider
-                    ui.horizontal(|ui| {
-                        ui.label(RichText::new("Temperature:").font(FontId::proportional(12.0)).color(theme.text_primary));
-                        let slider = ui.add(egui::Slider::new(&mut store.settings.groq.temperature, 0.0..=2.0).step_by(0.05));
-                        if slider.changed() {
-                            store.save_settings();
-                        }
-                    });
+                    // Sliders on a shared label column so they align at the
+                    // same x; both show their live value.
+                    egui::Grid::new("groq_numeric_settings")
+                        .num_columns(2)
+                        .spacing([12.0, 8.0])
+                        .show(ui, |ui| {
+                            ui.label(RichText::new("Temperature:").font(FontId::proportional(12.0)).color(theme.text_primary));
+                            let slider = ui.add(
+                                egui::Slider::new(&mut store.settings.groq.temperature, 0.0..=2.0)
+                                    .step_by(0.05)
+                                    .show_value(true),
+                            );
+                            if slider.changed() {
+                                store.save_settings();
+                            }
+                            ui.end_row();
 
-                    ui.add_space(8.0);
-
-                    // Top-P slider
-                    ui.horizontal(|ui| {
-                        ui.label(RichText::new("Top-P:").font(FontId::proportional(12.0)).color(theme.text_primary));
-                        let slider = ui.add(egui::Slider::new(&mut store.settings.groq.top_p, 0.0..=1.0).step_by(0.05));
-                        if slider.changed() {
-                            store.save_settings();
-                        }
-                    });
+                            ui.label(RichText::new("Top-P:").font(FontId::proportional(12.0)).color(theme.text_primary));
+                            let slider = ui.add(
+                                egui::Slider::new(&mut store.settings.groq.top_p, 0.0..=1.0)
+                                    .step_by(0.05)
+                                    .show_value(true),
+                            );
+                            if slider.changed() {
+                                store.save_settings();
+                            }
+                            ui.end_row();
+                        });
 
                     ui.add_space(8.0);
 
                     // Max Tokens (aligned to 32,768)
                     ui.label(
-                        RichText::new("Max Completion Tokens: 32,768 (Optimal context limit)")
-                            .font(FontId::proportional(12.0))
-                            .color(theme.text_secondary),
+                        RichText::new(
+                            "Max completion tokens: 32,768 (the optimal context limit)",
+                        )
+                        .font(FontId::proportional(12.0))
+                        .color(theme.text_secondary),
                     );
                 });
 
@@ -1003,7 +1072,9 @@ impl Studio {
                                 .strong(),
                         );
                         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                            if spectrum_button(ui, "Reset to Default", false, theme).clicked() {
+                            if spectrum_button(ui, Some(icons::REFRESH), "Reset to Default", false, theme)
+                                .clicked()
+                            {
                                 store.settings.groq.global_system_prompt = GroqConfig::default().global_system_prompt;
                                 store.save_settings();
                             }
@@ -1037,35 +1108,76 @@ impl Studio {
                     );
                     ui.add_space(10.0);
 
-                    // Theme selector
+                    // Theme selector: Spectrum segmented control - a quiet pill
+                    // track with a filled active segment (no raw accent fill).
                     ui.horizontal(|ui| {
                         ui.label(RichText::new("Theme:").font(FontId::proportional(12.0)).color(theme.text_primary));
                         let is_dark = theme.is_dark;
 
-                        // The active label sits on the accent pill; it must
-                        // stay white or it is unreadable in both themes.
-                        if ui
-                            .selectable_label(
-                                is_dark,
-                                RichText::new("Dark Mode")
-                                    .color(if is_dark { Color32::WHITE } else { theme.text_secondary })
-                                    .strong(),
-                            )
-                            .clicked()
-                        {
-                            store.settings.theme_mode = ThemeMode::Dark;
-                            store.save_settings();
+                        let seg_w = 220.0;
+                        let seg_h = 30.0;
+                        let (rect, _) =
+                            ui.allocate_exact_size(Vec2::new(seg_w, seg_h), Sense::hover());
+
+                        // Track
+                        ui.painter().rect_filled(
+                            rect,
+                            CornerRadius::same((seg_h / 2.0) as u8),
+                            theme.surface_subtle,
+                        );
+
+                        let half = rect.split_left_right_at_x(rect.center().x);
+                        let segments = [("Dark Mode", true), ("Light Mode", false)];
+
+                        let mut picked: Option<ThemeMode> = None;
+                        for (i, (label, is_dark_mode)) in segments.iter().enumerate() {
+                            let seg_rect = if i == 0 { half.0 } else { half.1 };
+                            let active = is_dark == *is_dark_mode;
+                            let resp = ui
+                                .interact(seg_rect, ui.scope_id().with(("theme_seg", i)), Sense::click())
+                                .on_hover_text(if *is_dark_mode { "Dark theme" } else { "Light theme" });
+                            if resp.clicked() {
+                                picked = Some(if *is_dark_mode { ThemeMode::Dark } else { ThemeMode::Light });
+                            }
+
+                            if active {
+                                // Filled segment: white in dark mode, white in
+                                // light mode - macOS-style knob.
+                                let inset = 2.0;
+                                let fill_rect = Rect::from_min_max(
+                                    Pos2::new(seg_rect.left() + inset, seg_rect.top() + inset),
+                                    Pos2::new(seg_rect.right() - inset, seg_rect.bottom() - inset),
+                                );
+                                ui.painter().rect_filled(
+                                    fill_rect,
+                                    CornerRadius::same(((seg_h - inset * 2.0) / 2.0) as u8),
+                                    Color32::WHITE,
+                                );
+                            }
+
+                            let color = if active {
+                                Color32::from_rgb(0x13, 0x13, 0x13)
+                            } else {
+                                theme.text_secondary
+                            };
+                            let galley = ui.painter().layout(
+                                label.to_string(),
+                                FontId::proportional(12.0),
+                                color,
+                                f32::INFINITY,
+                            );
+                            ui.painter().galley(
+                                Pos2::new(
+                                    seg_rect.center().x - galley.size().x / 2.0,
+                                    seg_rect.center().y - galley.size().y / 2.0,
+                                ),
+                                galley,
+                                Color32::WHITE,
+                            );
                         }
-                        if ui
-                            .selectable_label(
-                                !is_dark,
-                                RichText::new("Light Mode")
-                                    .color(if !is_dark { Color32::WHITE } else { theme.text_secondary })
-                                    .strong(),
-                            )
-                            .clicked()
-                        {
-                            store.settings.theme_mode = ThemeMode::Light;
+
+                        if let Some(mode) = picked {
+                            store.settings.theme_mode = mode;
                             store.save_settings();
                         }
                     });
@@ -1093,6 +1205,19 @@ impl Studio {
             ui.add_space(20.0);
         });
     }
+}
+
+/// Parses a Segoe MDL2 icon input (e.g. "E70F" or "\u{E70F}") into a u32
+/// codepoint within the MDL2 private-use range; None when invalid.
+fn mdl2_codepoint(input: &str) -> Option<u32> {
+    let t = input
+        .trim()
+        .trim_start_matches("\\u{")
+        .trim_start_matches("U+")
+        .trim_start_matches("u+")
+        .trim_end_matches('}');
+    let cp = u32::from_str_radix(t, 16).ok()?;
+    (0xE000..=0xF8FF).contains(&cp).then_some(cp)
 }
 
 /// Formats a number with thousands separators (12345 -> "12,345").
@@ -1123,32 +1248,35 @@ fn render_metric_card(
     title: &str,
     value: &str,
     subtitle: &str,
-    accent_color: Color32,
     card_width: f32,
     theme: &SpectrumTheme,
 ) {
     card_frame(theme, egui::Margin::symmetric(14, 12))
         .show(ui, |ui| {
-            ui.set_width(card_width);
-            ui.set_min_height(72.0);
+            // Vertical body: this Frame can be shown inside a horizontal
+            // parent, and egui frames inherit the parent layout.
+            ui.vertical(|ui| {
+                ui.set_width(card_width);
+                ui.set_min_height(72.0);
 
-            ui.label(
-                RichText::new(title)
-                    .font(FontId::proportional(12.0))
-                    .color(theme.text_secondary)
-                    .strong(),
-            );
-            ui.add_space(2.0);
-            ui.label(
-                RichText::new(value)
-                    .font(FontId::proportional(22.0))
-                    .color(accent_color)
-                    .strong(),
-            );
-            ui.label(
-                RichText::new(subtitle)
-                    .font(FontId::proportional(12.0))
-                    .color(theme.text_tertiary),
-            );
+                ui.label(
+                    RichText::new(title)
+                        .font(FontId::proportional(12.0))
+                        .color(theme.text_secondary)
+                        .strong(),
+                );
+                ui.add_space(2.0);
+                ui.label(
+                    RichText::new(value)
+                        .font(FontId::proportional(22.0))
+                        .color(theme.text_primary)
+                        .strong(),
+                );
+                ui.label(
+                    RichText::new(subtitle)
+                        .font(FontId::proportional(12.0))
+                        .color(theme.text_tertiary),
+                );
+            });
         });
 }
