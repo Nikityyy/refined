@@ -201,7 +201,12 @@ impl Studio {
             } else {
                 theme.surface_subtle
             };
-            spectrum_badge(ui, "v0.2.0", version_bg, theme.text_secondary);
+            spectrum_badge(
+                ui,
+                &format!("v{}", env!("CARGO_PKG_VERSION")),
+                version_bg,
+                theme.text_secondary,
+            );
 
             ui.add_space(20.0);
 
@@ -1514,4 +1519,39 @@ fn render_metric_card(
                 );
             });
         });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{fmt_thousands, mdl2_codepoint, truncate_chars};
+
+    #[test]
+    fn thousands_separators() {
+        assert_eq!(fmt_thousands(0), "0");
+        assert_eq!(fmt_thousands(999), "999");
+        assert_eq!(fmt_thousands(1000), "1,000");
+        assert_eq!(fmt_thousands(1234567), "1,234,567");
+    }
+
+    #[test]
+    fn truncation_cuts_at_word_boundaries() {
+        let text = "The replacement of human editors is unlikely.";
+        let out = truncate_chars(text, 12);
+        assert!(out.ends_with("..."));
+        assert!(!out.trim_end_matches('.').contains("replacemen"));
+        // Short input passes through untouched.
+        assert_eq!(truncate_chars("short", 20), "short");
+    }
+
+    #[test]
+    fn mdl2_codes_are_validated() {
+        assert_eq!(mdl2_codepoint("E70F"), Some(0xE70F));
+        assert_eq!(mdl2_codepoint("\\u{E74E}"), Some(0xE74E));
+        assert_eq!(mdl2_codepoint("u+E74E"), Some(0xE74E));
+        assert_eq!(mdl2_codepoint("ZZZZ"), None);
+        // Outside the MDL2 private-use range -> rejected.
+        assert_eq!(mdl2_codepoint("0041"), None);
+        assert_eq!(mdl2_codepoint("F8FF"), Some(0xF8FF));
+        assert_eq!(mdl2_codepoint("F900"), None);
+    }
 }

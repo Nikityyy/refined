@@ -280,10 +280,23 @@ nonsense, which is a very serious problem for publishing.\n";
                     .with_position([hud_pos.x, hud_pos.y])
                     .with_window_level(egui::WindowLevel::AlwaysOnTop),
                 |hud_ctx, _class| {
-                // Auto-dismiss HUD on focus loss (after the initial open frame).
-                // In demo mode the HUD stays open for inspection.
+                // Auto-dismiss HUD on focus loss (after the initial open
+                // frame) - but ONLY in the interaction states. The completion
+                // path pastes into the user's app, which by design moves OS
+                // focus there; dismissing on focus loss would then kill the
+                // HUD mid-Processing and the diff summary could never be
+                // seen. Processing and DiffView own the screen until the
+                // user acts (Done/Esc).
                 let sticky = self.hud.demo_sticky;
-                if !self.hud.just_opened && !sticky && hud_ctx.input(|i| i.viewport().focused == Some(false)) {
+                let dismissible = matches!(
+                    self.hud.state,
+                    crate::hud::HudState::SelectingAction | crate::hud::HudState::RewriteAsInput { .. }
+                );
+                if !self.hud.just_opened
+                    && !sticky
+                    && dismissible
+                    && hud_ctx.input(|i| i.viewport().focused == Some(false))
+                {
                     self.hud.close();
                     return;
                 }

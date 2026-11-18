@@ -382,10 +382,7 @@ pub fn complete_action(
         }
     }
     if finish_reason.as_deref() == Some("length") {
-        return Err(
-            "The model ran out of completion tokens and the result was cut short. Raise \"Max completion tokens\" in Settings or pick a shorter action."
-                .to_string(),
-        );
+        return Err("The result was cut short by the completion token budget - try again, or shorten the selected text.".to_string());
     }
     let content = match content {
         Some(c) if !c.trim().is_empty() => c,
@@ -402,4 +399,34 @@ pub fn complete_action(
         duration_ms,
         model: config.model.clone(),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::clean_generated_text;
+
+    #[test]
+    fn clean_strips_wrapper_newlines_and_maps_nb_hyphen() {
+        let out = clean_generated_text("\r\nFixed text.\r\n", "Original text.");
+        assert_eq!(out, "Fixed text.");
+        assert_eq!(clean_generated_text("convincingly\u{2011}sounding", "x"), "convincingly-sounding");
+    }
+
+    #[test]
+    fn clean_strips_zero_width_chars() {
+        for zw in ['\u{200B}', '\u{200C}', '\u{200D}', '\u{2060}', '\u{FEFF}'] {
+            let out = clean_generated_text(&format!("a{zw}b"), "x");
+            assert_eq!(out, "ab");
+        }
+    }
+
+    #[test]
+    fn clean_restores_original_trailing_newlines_only() {
+        // A selection ending at a paragraph boundary keeps its newline;
+        // the model's own wrapper newlines are gone either way.
+        assert_eq!(clean_generated_text("\nFixed.\n", "Orig.\n"), "Fixed.\n");
+        assert_eq!(clean_generated_text("\nFixed.\n", "Orig.\r\n"), "Fixed.\r\n");
+        // A selection without a trailing newline does not gain one.
+        assert_eq!(clean_generated_text("\nFixed.\n", "Orig."), "Fixed.");
+    }
 }

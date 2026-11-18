@@ -36,7 +36,7 @@ SolidCompression=yes
 OutputDir=..\target\installer
 OutputBaseFilename=Refined-Setup-{#AppVersion}
 VersionInfoVersion={#AppVersion}
-VersionInfoDescription=Refined installieren
+VersionInfoDescription=Refined installer
 LicenseFile=..\LICENSE
 
 [Languages]
