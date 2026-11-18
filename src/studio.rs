@@ -71,7 +71,7 @@ impl Studio {
             new_action_dialog_open: false,
             new_action_name: String::new(),
             new_action_desc: String::new(),
-            new_action_icon: "✨".to_string(),
+            new_action_icon: "E70F".to_string(),
             new_action_prompt: String::new(),
             hotkey_failed: false,
             settings_save_at: None,
