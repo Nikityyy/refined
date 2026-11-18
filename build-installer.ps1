@@ -29,6 +29,15 @@ try {
     "$hash  $([IO.Path]::GetFileName($output))" | Set-Content -Encoding ascii "$output.sha256"
     Write-Host "Installer created successfully:" -ForegroundColor Green
     Write-Output $output
+
+    # The portable exe and its checksum: release assets the in-app
+    # self-updater downloads (asset names are matched exactly: Refined.exe
+    # and Refined.exe.sha256).
+    $portable = Join-Path $PSScriptRoot "target\installer\Refined.exe"
+    Copy-Item -LiteralPath (Join-Path $PSScriptRoot "target\release\refined.exe") -Destination $portable -Force
+    $phash = (Get-FileHash -LiteralPath $portable -Algorithm SHA256).Hash.ToLowerInvariant()
+    "$phash  Refined.exe" | Set-Content -Encoding ascii "$portable.sha256"
+    Write-Host "Portable exe staged: $portable" -ForegroundColor Green
 } finally {
     Pop-Location
 }

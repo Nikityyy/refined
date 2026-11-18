@@ -49,7 +49,7 @@ english.SelectTasksDesc=Shortcuts
 english.SelectTasksLabel2=Refined will be available in the Start menu. Would you also like a desktop shortcut?
 english.SetupAppRunningError=Refined is currently running in the background or system tray.%n%nPlease exit Refined before proceeding, then click OK to continue or Cancel to exit.
 english.UninstallAppRunningError=Refined is currently running in the background or system tray.%n%nPlease exit Refined before proceeding, then click OK to continue or Cancel to exit.
-english.FinishedLabel=Refined is installed.%n%nSelect any text in any application and press Alt + Q to refine your writing.
+english.FinishedLabel=Refined is installed.%n%nSelect any text in any application and press Alt + V to refine your writing.
 english.ConfirmUninstall=Remove Refined?%n%nYour study history and settings will be preserved.
 german.SelectDirDesc=Wo soll Refined installiert werden?
 german.SelectDirLabel3=Refined wird nur für dein Windows-Konto installiert. Administratorrechte sind nicht nötig.
@@ -57,7 +57,7 @@ german.SelectTasksDesc=Verknüpfungen
 german.SelectTasksLabel2=Im Startmenü findest du Refined nach der Installation. Möchtest du auch eine Verknüpfung auf dem Desktop?
 german.SetupAppRunningError=Refined läuft noch im Hintergrund oder im Infobereich.%n%nBitte beende Refined und klicke auf OK, um fortzufahren.
 german.UninstallAppRunningError=Refined läuft noch im Hintergrund oder im Infobereich.%n%nBitte beende Refined und klicke auf OK, um fortzufahren.
-german.FinishedLabel=Refined ist installiert.%n%nMarkiere Text in beliebigen Apps und drücke Alt + Q, um Texte zu verfeinern.
+german.FinishedLabel=Refined ist installiert.%n%nMarkiere Text in beliebigen Apps und drücke Alt + V, um Texte zu verfeinern.
 german.ConfirmUninstall=Möchtest du Refined entfernen?%n%nDeine Einstellungen und Historie bleiben erhalten.
 
 [Tasks]

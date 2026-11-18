@@ -113,7 +113,7 @@ pub const FALLBACK_MODELS: &[&str] = &[
 
 /// Shared HTTP agent with the overall call timeout configured, so a hung
 /// TLS/HTTP connection surfaces as an error instead of a frozen HUD.
-fn http_agent() -> &'static ureq::Agent {
+pub fn http_agent() -> &'static ureq::Agent {
     static AGENT: std::sync::OnceLock<ureq::Agent> = std::sync::OnceLock::new();
     AGENT.get_or_init(|| {
         // schannel (Windows' own TLS) instead of ring+rustls: same trust

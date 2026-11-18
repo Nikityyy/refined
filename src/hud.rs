@@ -1,4 +1,4 @@
-//! Alt+Q Contextual HUD: Action palette, inline custom prompt, processing state, and diff viewer.
+//! Alt+V Contextual HUD: Action palette, inline custom prompt, processing state, and diff viewer.
 
 use crate::actions::{standard_languages, ActionItem};
 use crate::diff::{compute_diff, DiffChunk, DiffStats};

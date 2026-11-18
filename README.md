@@ -2,7 +2,7 @@
 
 I write all day - notes, essays, emails - and the text is usually fine but never great. To fix a sentence I had to copy it into a chat window, wait, paste it back, and lose my place. That breaks the flow every single time.
 
-Refined fixes the text where it already is. Select any text in any app, press Alt+Q, pick an action. The text is replaced in place, a small window shows exactly what changed, and one key undoes it if the model made it worse. That's the whole product.
+Refined fixes the text where it already is. Select any text in any app, press Alt+V, pick an action. The text is replaced in place, a small window shows exactly what changed, and one key undoes it if the model made it worse. That's the whole product.
 
 <p>
   <img src="docs/hud-diff.png" alt="The HUD showing a polished text with an inline diff" width="49%">
@@ -18,13 +18,15 @@ Windows 10 or 11 (64-bit). Download the latest `Refined-Setup` from the [release
 
 The installer is not code-signed yet, so Windows may show an unknown-publisher or SmartScreen warning. Every release lists the SHA-256 checksum.
 
-Grab a free API key from [console.groq.com/keys](https://console.groq.com/keys) and paste it in Settings on first launch. The key stays on your machine, and requests go from your machine straight to Groq.
+Grab a free API key from [console.groq.com/keys](https://console.groq.com/keys) and paste it in Settings on first launch - right-click the field for paste, copy and clear. The key stays on your machine, and requests go from your machine straight to Groq.
+
+Refined updates itself. On launch it quietly checks the releases page of this repo, downloads the new binary in the background, verifies its SHA-256, and swaps itself in place - no setup wizard, no admin password, settings and history untouched. One click on "Restart now" and the new version is running. The Updates card in Settings checks on demand.
 
 To build it yourself, install [Rust](https://rustup.rs) with the Windows MSVC build tools and run `cargo build --release --locked`. For the installer you also need [Inno Setup 6](https://jrsoftware.org/inno-setup/downloads) and `powershell -File .\build-installer.ps1`.
 
 ## Use
 
-Select text anywhere. Press Alt+Q. The palette appears next to the selection:
+Select text anywhere. Press Alt+V. The palette appears next to the selection:
 
 - **1 Polish** - fix grammar and flow, keep my voice.
 - **2 Condense** - cut the filler, keep every fact.

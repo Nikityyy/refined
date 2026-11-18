@@ -15,6 +15,7 @@ mod store;
 mod studio;
 mod theme;
 mod tray;
+mod updater;
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::channel;
@@ -182,6 +183,9 @@ fn main() -> eframe::Result {
 
     // Refresh Windows autostart entry if enabled
     autostart::refresh();
+
+    // Previous version cleaned off after a self-update
+    updater::cleanup_after_update();
 
     if demo_only_modes() {
         return Ok(());

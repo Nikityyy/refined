@@ -7,6 +7,7 @@ use crate::history::HistoryEntry;
 use crate::stats::calculate_stats;
 use crate::store::{Store, ThemeMode};
 use crate::theme::{card_frame, icons, render_diff_view, render_rf_logo, spectrum_badge, spectrum_button, spectrum_button_compact, spectrum_slider, spectrum_switch, SpectrumTheme};
+use crate::updater::{self, UpdateState};
 use eframe::egui::{
     self, Align, Align2, Color32, CornerRadius, FontId, Key, Layout, Pos2, Rect, RichText,
     ScrollArea, Sense, Stroke, Ui, Vec2,
@@ -42,7 +43,7 @@ pub struct Studio {
     pub new_action_desc: String,
     pub new_action_icon: String,
     pub new_action_prompt: String,
-    /// Set from the hotkey thread each frame: Alt+Q failed to register.
+    /// Set from the hotkey thread each frame: Alt+V failed to register.
     pub hotkey_failed: bool,
     /// Pending settings save: UI edits mark it, and the next update flushes
     /// it at most ~half a second later. A write per keystroke or slider tick
@@ -52,11 +53,19 @@ pub struct Studio {
     /// today). Plain recalculation is O(n) with chunk scans and used to run
     /// every frame while the Statistics tab was open.
     pub stats_cache: Option<(usize, String, String, crate::stats::AggregatedStats)>,
+    /// Update-check worker channel; None until the first drain.
+    pub update_rx: Option<Receiver<UpdateState>>,
+    pub update_tx: Sender<UpdateState>,
+    /// Latest known update state (None = the check has not reported back).
+    pub update_state: Option<UpdateState>,
+    /// Set by the banner's "Restart now" button; the next update applies it.
+    pub pending_restart: bool,
 }
 
 impl Studio {
     pub fn new() -> Self {
         let (models_tx, models_rx) = channel();
+        let (update_tx, update_rx) = channel();
         Self {
             current_tab: StudioTab::History,
             history_search: String::new(),
@@ -76,7 +85,57 @@ impl Studio {
             hotkey_failed: false,
             settings_save_at: None,
             stats_cache: None,
+            update_rx: Some(update_rx),
+            update_tx,
+            update_state: None,
+            pending_restart: false,
         }
+    }
+
+    /// Spawns a background update check if none is in flight.
+    pub fn check_for_updates(&mut self) {
+        if matches!(
+            self.update_state,
+            Some(UpdateState::Available(_)) | Some(UpdateState::Checking) | Some(UpdateState::Ready(_))
+        ) {
+            return;
+        }
+        self.update_state = Some(UpdateState::Checking);
+        let tx = self.update_tx.clone();
+        std::thread::spawn(move || match updater::check_latest() {
+            Ok(Some(info)) => {
+                let _ = tx.send(UpdateState::Available(info));
+            }
+            Ok(None) => {
+                let _ = tx.send(UpdateState::UpToDate);
+            }
+            Err(e) => {
+                let _ = tx.send(UpdateState::Failed(e));
+            }
+        });
+    }
+
+    /// Downloads the staged update in the background.
+    fn start_update_download(&mut self, info: updater::UpdateInfo) {
+        self.update_state = Some(UpdateState::Checking);
+        let tx = self.update_tx.clone();
+        std::thread::spawn(move || {
+            let _ = tx.send(match updater::download(&info) {
+                Ok(staged) => {
+                    let _ = staged;
+                    UpdateState::Ready(info)
+                }
+                Err(e) => {
+                    let _ = std::fs::remove_file(
+                        std::env::current_exe()
+                            .ok()
+                            .and_then(|p| p.parent().map(|d| d.join("Refined.update.tmp")))
+                            .unwrap_or_default(),
+                    );
+                    UpdateState::Failed(e)
+                }
+            });
+        });
     }
 
     pub fn fetch_models(&mut self, api_key: &str) {
@@ -131,8 +190,108 @@ impl Studio {
         self.settings_save_at.take().is_some()
     }
 
+    /// The update banner body. Callers wrap it in the quiet alert style.
+    fn render_update_banner(&mut self, ui: &mut Ui, theme: &SpectrumTheme, msg: &str) {
+        egui::Frame::new()
+            .fill(theme.accent_badge_bg)
+            .stroke(Stroke::new(1.0, theme.border))
+            .corner_radius(CornerRadius::same(6))
+            .inner_margin(egui::Margin::symmetric(12, 8))
+            .show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                ui.horizontal(|ui| {
+                    ui.label(
+                        RichText::new(icons::DOWNLOAD)
+                            .font(FontId::proportional(13.0))
+                            .color(theme.accent_badge_text),
+                    );
+                    ui.label(
+                        RichText::new(msg)
+                            .font(FontId::proportional(12.0))
+                            .color(theme.accent_badge_text),
+                    );
+                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        match self.update_state.clone() {
+                            Some(UpdateState::Available(info)) => {
+                                if spectrum_button(ui, Some(icons::DOWNLOAD), &format!("Get {}", info.version), true, theme)
+                                    .clicked()
+                                {
+                                    self.start_update_download(info);
+                                }
+                            }
+                            Some(UpdateState::Ready(_)) => {
+                                if spectrum_button(ui, Some(icons::REFRESH), "Restart now", true, theme)
+                                    .clicked()
+                                {
+                                    self.pending_restart = true;
+                                }
+                            }
+                            _ => {}
+                        }
+                    });
+                });
+            });
+        ui.add_space(8.0);
+    }
+
+    /// Update status row for the Settings "Updates" card.
+    fn render_update_status(&mut self, ui: &mut Ui, theme: &SpectrumTheme) {
+        ui.horizontal(|ui| {
+            let (line, color) = match &self.update_state {
+                None | Some(UpdateState::Checking) => {
+                    ("Checking for updates...".to_string(), theme.text_secondary)
+                }
+                Some(UpdateState::UpToDate) => (
+                    format!("You are on the latest version ({}).", env!("CARGO_PKG_VERSION")),
+                    theme.diff_add_text,
+                ),
+                Some(UpdateState::Available(info)) => {
+                    (format!("Version {} is available.", info.version), theme.text_primary)
+                }
+                Some(UpdateState::Ready(info)) => (
+                    format!("Version {} is downloaded - use the banner to restart.", info.version),
+                    theme.text_primary,
+                ),
+                Some(UpdateState::Failed(e)) => (e.clone(), theme.diff_del_text),
+            };
+            ui.label(
+                RichText::new(line)
+                    .font(FontId::proportional(12.0))
+                    .color(color),
+            );
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                let busy = matches!(self.update_state, Some(UpdateState::Checking));
+                if ui.add_enabled(!busy, egui::Button::new(RichText::new("Check again").font(FontId::proportional(12.0)).color(Color32::WHITE)).fill(theme.accent).stroke(Stroke::NONE).corner_radius(CornerRadius::same(4))).clicked() {
+                    self.check_for_updates();
+                }
+            });
+        });
+    }
+
     pub fn update(&mut self, ui: &mut Ui, store: &mut Store, theme: &SpectrumTheme) {
         self.flush_settings(store);
+
+        // Update-check worker reports back here (several messages may land
+        // at once); the last one wins. The first Studio open kicks the
+        // automatic check off exactly once.
+        if let Some(rx) = &self.update_rx {
+            while let Ok(state) = rx.try_recv() {
+                self.update_state = Some(state);
+            }
+        }
+        if self.update_state.is_none() {
+            self.check_for_updates();
+        }
+
+        // "Restart now": flush pending settings, swap in the staged binary,
+        // and relaunch. Does not return on success.
+        if self.pending_restart {
+            self.pending_restart = false;
+            self.flush_pending_now(store);
+            if let Err(e) = updater::apply_staged() {
+                self.update_state = Some(UpdateState::Failed(e));
+            }
+        }
 
         if let Some(ref rx) = self.models_rx {
             if let Ok(res) = rx.try_recv() {
@@ -264,6 +423,25 @@ impl Studio {
         ui.separator();
         ui.add_space(6.0);
 
+        // Update banner: shown on every tab when a new version is ready or
+        // staged - the one status the user must never miss.
+        match self.update_state.clone() {
+            Some(UpdateState::Available(info)) => {
+                self.render_update_banner(ui, theme, &format!(
+                    "Version {} is available (this is {}).",
+                    info.version,
+                    env!("CARGO_PKG_VERSION")
+                ));
+            }
+            Some(UpdateState::Ready(info)) => {
+                self.render_update_banner(ui, theme, &format!(
+                    "Version {} is downloaded and verified - restart to finish.",
+                    info.version
+                ));
+            }
+            _ => {}
+        }
+
         match self.current_tab {
             StudioTab::History => self.render_history_tab(ui, store, theme),
             StudioTab::Statistics => self.render_statistics_tab(ui, store, theme),
@@ -348,7 +526,7 @@ impl Studio {
                 );
                 ui.add_space(4.0);
                 ui.label(
-                    RichText::new("Select text in any app, press Alt+Q, and pick an action.")
+                    RichText::new("Select text in any app, press Alt+V, and pick an action.")
                         .font(FontId::proportional(12.0))
                         .color(theme.text_secondary),
                 );
@@ -647,7 +825,7 @@ impl Studio {
                         if stats.total_refinements == 0 {
                             ui.add_space(36.0);
                             ui.label(
-                                RichText::new("Refinements will appear here once you use Alt+Q.")
+                                RichText::new("Refinements will appear here once you use Alt+V.")
                                     .font(FontId::proportional(12.0))
                                     .color(theme.text_secondary),
                             );
@@ -1079,7 +1257,7 @@ impl Studio {
             );
 
             // The hotkey thread reports register failure here: a GUI app's
-            // stderr is invisible, and a dead Alt+Q with no signal is
+            // stderr is invisible, and a dead Alt+V with no signal is
             // unfixable from the user's side.
             if self.hotkey_failed {
                 ui.add_space(8.0);
@@ -1090,7 +1268,7 @@ impl Studio {
                             .color(theme.diff_del_text),
                     );
                     ui.label(
-                        RichText::new("Alt+Q could not be registered - another app may be using it. Refined can still run from the tray.")
+                        RichText::new("Alt+V could not be registered - another app may be using it. Refined can still run from the tray.")
                             .font(FontId::proportional(12.0))
                             .color(theme.diff_del_text),
                     );
@@ -1125,7 +1303,47 @@ impl Studio {
                         } else {
                             ui.add_sized([input_w, 28.0], egui::TextEdit::singleline(&mut store.settings.groq.api_key).align(Align2::LEFT_CENTER).password(true))
                         };
-                        if edit.changed() {
+
+                        // Right-click menu on the key field: long opaque keys
+                        // are pasted, never typed, so paste/copy/clear operate
+                        // on the whole value.
+                        let mut key_edited = false;
+                        edit.context_menu(|ui| {
+                            let clipboard = crate::clipboard::get_clipboard_text().unwrap_or_default();
+                            if ui
+                                .add_enabled(
+                                    !clipboard.trim().is_empty(),
+                                    egui::Button::new("Paste from clipboard"),
+                                )
+                                .clicked()
+                            {
+                                store.settings.groq.api_key = clipboard.trim().to_string();
+                                key_edited = true;
+                                ui.close();
+                            }
+                            if ui
+                                .add_enabled(
+                                    !store.settings.groq.api_key.is_empty(),
+                                    egui::Button::new("Copy key"),
+                                )
+                                .clicked()
+                            {
+                                crate::clipboard::set_clipboard_text(&store.settings.groq.api_key);
+                                ui.close();
+                            }
+                            if ui
+                                .add_enabled(
+                                    !store.settings.groq.api_key.is_empty(),
+                                    egui::Button::new("Clear"),
+                                )
+                                .clicked()
+                            {
+                                store.settings.groq.api_key.clear();
+                                key_edited = true;
+                                ui.close();
+                            }
+                        });
+                        if key_edited || edit.changed() {
                             self.mark_settings_dirty();
                         }
 
@@ -1430,10 +1648,33 @@ impl Studio {
 
                     ui.add_space(8.0);
                     ui.label(
-                        RichText::new("Global Shortcut: Alt + Q (triggers only when text is actively selected).")
+                        RichText::new("Global Shortcut: Alt + V (triggers only when text is actively selected).")
                             .font(FontId::proportional(12.0))
                             .color(theme.text_secondary),
                     );
+                });
+
+            ui.add_space(14.0);
+
+            // Updates Card: current version and the self-updater state.
+            // Updating never runs an installer - see the banner at the top.
+            card_frame(theme, egui::Margin::same(16))
+                .show(ui, |ui| {
+                    ui.set_width(ui.available_width());
+
+                    ui.label(
+                        RichText::new("Updates")
+                            .font(FontId::proportional(14.0))
+                            .color(theme.text_primary)
+                            .strong(),
+                    );
+                    ui.label(
+                        RichText::new("Checks GitHub automatically on launch. Updates download in the background and swap in without an installer; settings and history are untouched.")
+                            .font(FontId::proportional(12.0))
+                            .color(theme.text_secondary),
+                    );
+                    ui.add_space(8.0);
+                    self.render_update_status(ui, theme);
                 });
 
             ui.add_space(20.0);

@@ -182,7 +182,7 @@ impl eframe::App for RefinedApp {
             self.studio_open.store(false, Ordering::Relaxed);
         }
 
-        // Process Alt + Q triggers from hotkey thread:
+        // Process Alt + V triggers from hotkey thread:
         // Opens the floating HUD viewport directly WITHOUT unhiding the 960x680 Studio window!
         while let Ok(payload) = self.hotkey_rx.try_recv() {
             self.hud.open(
@@ -258,7 +258,7 @@ nonsense, which is a very serious problem for publishing.\n";
             });
         }
 
-        // 1. Contextual Floating Alt+Q HUD Viewport
+        // 1. Contextual Floating Alt+V HUD Viewport
         if self.hud.is_visible {
             let hud_viewport_id = egui::ViewportId::from_hash_of("refined_hud");
             let hud_pos = self.hud.position;

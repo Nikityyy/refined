@@ -126,7 +126,7 @@ fn key_event(vk: VIRTUAL_KEY, up: bool) -> INPUT {
 /// Releases physical Alt key if held, then sends Ctrl+C.
 pub fn send_copy_with_alt_release() {
     unsafe {
-        // If Alt is physically held down from Alt+Q, synthesize Alt KeyUp first
+        // If Alt is physically held down from Alt+V, synthesize Alt KeyUp first
         // so target application sees pure Ctrl+C rather than Ctrl+Alt+C
         if (GetAsyncKeyState(VK_MENU.0 as i32) as u16 & 0x8000) != 0 {
             let alt_up = [key_event(VK_MENU, true)];

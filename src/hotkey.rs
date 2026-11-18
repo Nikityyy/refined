@@ -1,4 +1,9 @@
-//! Global Alt+Q Windows hotkey registration and selection trigger.
+//! Global Alt+V Windows hotkey registration and selection trigger.
+//!
+//! Alt+V ("verfeinern"/refine) rather than Alt+Q: on German keyboards AltGr+Q
+//! types "@" and Windows cannot tell AltGr from Alt in RegisterHotKey, so an
+//! Alt+Q hotkey would fire in the middle of every email address the user
+//! types. Alt+V has no AltGr assignment and no common global owner.
 
 use crate::clipboard::capture_selection_with_window;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -12,7 +17,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
     DispatchMessageW, GetCursorPos, PeekMessageW, TranslateMessage, MSG, PM_REMOVE, WM_HOTKEY, WM_QUIT,
 };
 
-const HOTKEY_ID: i32 = 0x4151; // 'A' 'Q'
+const HOTKEY_ID: i32 = 0x4156; // 'A' 'V'
 
 #[derive(Debug, Clone)]
 pub struct TriggerPayload {
@@ -22,29 +27,33 @@ pub struct TriggerPayload {
     pub target_hwnd: isize,
 }
 
+/// `stopping` is the app's quit flag: the listener runs while it is false.
 pub fn start_hotkey_listener(
     sender: Sender<TriggerPayload>,
-    running: Arc<AtomicBool>,
+    stopping: Arc<AtomicBool>,
     failed: Arc<AtomicBool>,
 ) -> std::thread::JoinHandle<()> {
     std::thread::spawn(move || unsafe {
-        // Register Alt + Q globally
+        // Register Alt + V globally
         let ok = RegisterHotKey(
             None,
             HOTKEY_ID,
             HOT_KEY_MODIFIERS(MOD_ALT.0 | MOD_NOREPEAT.0),
-            0x51, // 'Q'
+            0x56, // 'V'
         );
 
         if ok.is_err() {
             // Surfaced in the Studio Settings tab: a GUI app's eprintln is
             // invisible, and a dead hotkey with no signal is unfixable.
             failed.store(true, Ordering::Relaxed);
-            eprintln!("Warning: Could not register Alt+Q hotkey (another app may be using it).");
+            eprintln!("Warning: Could not register Alt+V hotkey (another app may be using it).");
         }
 
         let mut msg = MSG::default();
-        while running.load(Ordering::Relaxed) {
+        // The loop runs until the app quits. (Passing the quit flag here as
+        // a run flag once inverted this condition, and the hotkey registered
+        // and immediately unregistered itself: Alt+Q was dead code.)
+        while !stopping.load(Ordering::Relaxed) {
             if PeekMessageW(&mut msg, None, 0, 0, PM_REMOVE).as_bool() {
                 if msg.message == WM_QUIT {
                     break;
