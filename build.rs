@@ -4,7 +4,7 @@ fn main() {
         winresource::WindowsResource::new()
             .set_icon("installer/refined.ico")
             .set("ProductName", "Refined")
-            .set("FileDescription", "Refined - Adobe Spectrum 2 Text Refiner")
+            .set("FileDescription", "Refined - AI Text Refiner")
             .set("LegalCopyright", "Copyright (c) 2026 Nikita Berger")
             .set("OriginalFilename", "Refined.exe")
             .compile()
