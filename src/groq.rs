@@ -1,0 +1,267 @@
+﻿//! Groq AI API client.
+//! Fetches dynamic chat models and reasoning effort options, and executes completions.
+
+use serde::{Deserialize, Serialize};
+use std::time::Instant;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GroqConfig {
+    pub api_key: String,
+    pub model: String,
+    pub reasoning_effort: String,
+    pub temperature: f32,
+    pub top_p: f32,
+    pub max_completion_tokens: u32,
+    pub global_system_prompt: String,
+}
+
+impl Default for GroqConfig {
+    fn default() -> Self {
+        Self {
+            api_key: String::new(),
+            model: "openai/gpt-oss-120b".to_string(),
+            reasoning_effort: "high".to_string(),
+            temperature: 1.0,
+            top_p: 1.0,
+            max_completion_tokens: 65536,
+            global_system_prompt: "You are Refined, a precision writing and editing assistant. Your task is to transform the provided text according to the requested action with utmost clarity, elegance, and stylistic excellence. Preserve the original structural formatting (paragraphs, line breaks, indentation, bullet points, numbering, and capitalization style). Return ONLY the refined text directly with no greeting, explanation, surrounding quotes, or commentary.".to_string(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GroqModel {
+    pub id: String,
+    #[serde(default)]
+    pub owned_by: Option<String>,
+    #[serde(default)]
+    pub context_window: Option<u64>,
+    #[serde(default)]
+    pub active: Option<bool>,
+}
+
+#[derive(Debug, Clone)]
+pub struct CompletionResponse {
+    pub text: String,
+    pub duration_ms: u128,
+    pub model: String,
+    #[allow(dead_code)]
+pub prompt_tokens: Option<u64>,
+    #[allow(dead_code)]
+pub completion_tokens: Option<u64>,
+}
+
+#[derive(Deserialize)]
+struct ModelsListResponse {
+    data: Vec<GroqModel>,
+}
+
+#[derive(Serialize)]
+struct ChatMessage {
+    role: String,
+    content: String,
+}
+
+#[derive(Serialize)]
+struct ChatCompletionRequest {
+    model: String,
+    messages: Vec<ChatMessage>,
+    temperature: f32,
+    max_completion_tokens: u32,
+    top_p: f32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reasoning_effort: Option<String>,
+    stream: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    stop: Option<Vec<String>>,
+}
+
+#[derive(Deserialize)]
+struct ChatChoice {
+    message: ChatChoiceMessage,
+}
+
+#[derive(Deserialize)]
+struct ChatChoiceMessage {
+    content: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct ChatUsage {
+    prompt_tokens: Option<u64>,
+    completion_tokens: Option<u64>,
+}
+
+#[derive(Deserialize)]
+struct ChatCompletionResponse {
+    choices: Vec<ChatChoice>,
+    #[serde(default)]
+    usage: Option<ChatUsage>,
+}
+
+#[derive(Deserialize)]
+#[allow(dead_code)]
+struct GroqErrorResponse {
+    error: Option<GroqErrorDetail>,
+}
+
+#[derive(Deserialize)]
+#[allow(dead_code)]
+struct GroqErrorDetail {
+    message: Option<String>,
+}
+
+/// Fetches models list from Groq API and filters to chat models only.
+pub fn fetch_chat_models(api_key: &str) -> Result<Vec<GroqModel>, String> {
+    let key = api_key.trim();
+    if key.is_empty() {
+        return Err("Groq API key is empty. Please enter your API key in Refined Settings.".to_string());
+    }
+
+    let url = "https://api.groq.com/openai/v1/models";
+    let resp = ureq::get(url)
+        .header("Authorization", &format!("Bearer {key}"))
+        .call()
+        .map_err(|e| format!("Failed to reach Groq API: {e}"))?;
+
+    let parsed: ModelsListResponse = resp
+        .into_body()
+        .read_json()
+        .map_err(|e| format!("Failed to parse Groq models JSON: {e}"))?;
+
+    let mut chat_models: Vec<GroqModel> = parsed
+        .data
+        .into_iter()
+        .filter(|m| {
+            if m.active == Some(false) {
+                return false;
+            }
+            let lower = m.id.to_lowercase();
+            // Filter out non-chat models
+            if lower.contains("whisper")
+                || lower.contains("tts")
+                || lower.contains("audio")
+                || lower.contains("embed")
+                || lower.contains("bge")
+                || lower.contains("guard")
+                || lower.contains("safeguard")
+                || lower.contains("moderation")
+            {
+                return false;
+            }
+            true
+        })
+        .collect();
+
+    // Sort models so that preferred ones (like gpt-oss-120b and llama-3.3) are on top
+    chat_models.sort_by(|a, b| {
+        let a_pref = if a.id == "openai/gpt-oss-120b" { 0 } else if a.id.contains("llama-3.3") { 1 } else { 2 };
+        let b_pref = if b.id == "openai/gpt-oss-120b" { 0 } else if b.id.contains("llama-3.3") { 1 } else { 2 };
+        a_pref.cmp(&b_pref).then_with(|| a.id.cmp(&b.id))
+    });
+
+    Ok(chat_models)
+}
+
+/// Returns the standard reasoning effort options.
+pub fn available_reasoning_efforts() -> Vec<&'static str> {
+    vec!["high", "medium", "low", "none"]
+}
+
+/// Executes a chat completion with Groq API.
+pub fn complete_action(
+    config: &GroqConfig,
+    action_instruction: &str,
+    user_text: &str,
+    language_target: &str,
+) -> Result<CompletionResponse, String> {
+    let key = config.api_key.trim();
+    if key.is_empty() {
+        return Err("Groq API key is missing. Open Refined Settings to add your API key.".to_string());
+    }
+
+    let mut system_prompt = config.global_system_prompt.clone();
+    if !action_instruction.trim().is_empty() {
+        system_prompt.push_str("\n\nSPECIFIC ACTION INSTRUCTIONS:\n");
+        system_prompt.push_str(action_instruction);
+    }
+
+    if language_target.to_lowercase() != "auto" && !language_target.trim().is_empty() {
+        system_prompt.push_str(&format!(
+            "\n\nTARGET LANGUAGE: Output must strictly be in {}\n",
+            language_target
+        ));
+    } else {
+        system_prompt.push_str("\n\nTARGET LANGUAGE: Maintain the original language of the input text exactly.\n");
+    }
+
+    let effort = if config.reasoning_effort.to_lowercase() == "none" {
+        None
+    } else {
+        Some(config.reasoning_effort.clone())
+    };
+
+    let req_body = ChatCompletionRequest {
+        model: config.model.clone(),
+        messages: vec![
+            ChatMessage {
+                role: "system".to_string(),
+                content: system_prompt,
+            },
+            ChatMessage {
+                role: "user".to_string(),
+                content: user_text.to_string(),
+            },
+        ],
+        temperature: config.temperature,
+        max_completion_tokens: config.max_completion_tokens,
+        top_p: config.top_p,
+        reasoning_effort: effort,
+        stream: false,
+        stop: None,
+    };
+
+    let url = "https://api.groq.com/openai/v1/chat/completions";
+    let start = Instant::now();
+
+    let resp = ureq::post(url)
+        .header("Authorization", &format!("Bearer {key}"))
+        .header("Content-Type", "application/json")
+        .send_json(&req_body);
+
+    match resp {
+        Ok(res) => {
+            let duration_ms = start.elapsed().as_millis();
+            let body: ChatCompletionResponse = res
+                .into_body()
+                .read_json()
+                .map_err(|e| format!("Failed to parse Groq response: {e}"))?;
+
+            let content = body
+                .choices
+                .into_iter()
+                .find_map(|c| c.message.content)
+                .unwrap_or_default();
+
+            let (prompt_tokens, completion_tokens) = if let Some(u) = body.usage {
+                (u.prompt_tokens, u.completion_tokens)
+            } else {
+                (None, None)
+            };
+
+            Ok(CompletionResponse {
+                text: content.trim().to_string(),
+                duration_ms,
+                model: config.model.clone(),
+                prompt_tokens,
+                completion_tokens,
+            })
+        }
+        Err(e) => {
+            // Check for API error details in body if HTTP response is available
+            let err_msg = format!("Groq API error: {e}");
+            Err(err_msg)
+        }
+    }
+}
+
