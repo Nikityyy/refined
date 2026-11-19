@@ -17,7 +17,7 @@ The screenshots use sample study notes. I used [Adobe Spectrum 2](https://spectr
 
 Windows 10 or 11, 64-bit. Download the latest `Refined-Setup` from [GitHub Releases](https://github.com/Nikityyy/refined/releases/latest). It installs for your Windows account, adds Refined to the Start menu, and offers a desktop shortcut. It needs no administrator access. Pick `Refined.exe` if you want the portable build.
 
-The installer is unsigned, so Windows may show a SmartScreen warning. Each download has a SHA-256 checksum alongside it. On startup, Refined checks GitHub for updates and verifies the new executable before offering **Restart now**. You can also quit Refined from the tray and run a newer installer.
+The installer is unsigned, so Windows may show a SmartScreen warning. Each download has a SHA-256 checksum alongside it. On startup, Refined checks GitHub for updates and verifies the new executable before offering **Restart now**. Close the edit palette before restarting. You can also quit Refined from the tray and run a newer installer.
 
 Open **Settings** and paste a [Groq API key](https://console.groq.com/keys). Refined loads the chat models available to your account. It needs an internet connection to refine text.
 

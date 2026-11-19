@@ -21,6 +21,10 @@ impl ActionItem {
         self.is_builtin && self.prompt_instruction != self.default_instruction
     }
 
+    pub fn is_pinned(&self) -> bool {
+        self.is_builtin && self.is_rewrite_as
+    }
+
     pub fn reset_to_default(&mut self) {
         self.prompt_instruction = self.default_instruction.clone();
     }
@@ -39,10 +43,10 @@ pub fn default_actions() -> Vec<ActionItem> {
          "Organize the supplied facts into a short outline using plain-text headings and bullets where helpful. Keep every relevant fact and its qualifiers. Do not supply additional facts or dates."),
         ("simplify", "Simplify", "Explain the same idea in plainer language.", icons::CLEAR,
          "Rewrite in shorter sentences with familiar words. Briefly define necessary technical terms in context. Keep direction, cause and effect, and exceptions intact."),
-        ("rewrite_as", "Rewrite as...", "Give your own instructions for the rewrite.", icons::REPAIR,
-         "Rewrite the text according to this instruction: {user_instruction}"),
         ("flashcards", "Flashcards", "Turn notes into questions for active recall.", icons::BULLETED_LIST,
          "Replace the notes with only flashcard pairs. Use a Q: line and an A: line for each pair, with a blank line between pairs. Use one meaningful fact, formula, or relationship per card. Every answer must be supported directly by the notes. Do not repeat the source notes or add headings, commentary, or Markdown."),
+        ("rewrite_as", "Rewrite as...", "Give your own instructions for the rewrite.", icons::REPAIR,
+         "Rewrite the text according to this instruction: {user_instruction}"),
     ]
     .into_iter()
     .enumerate()
@@ -62,7 +66,7 @@ pub fn default_actions() -> Vec<ActionItem> {
 
 /// Update shipped defaults while retaining all custom prompts and actions.
 pub fn refresh_builtins(actions: &mut Vec<ActionItem>) {
-    for mut default in default_actions() {
+    for default in default_actions() {
         if let Some(action) = actions
             .iter_mut()
             .find(|action| action.is_builtin && action.id == default.id)
@@ -77,13 +81,22 @@ pub fn refresh_builtins(actions: &mut Vec<ActionItem>) {
         } else if default.id == "flashcards"
             && !actions.iter().any(|action| action.id == default.id)
         {
-            default.shortcut = if actions.len() < 9 {
-                (actions.len() + 1).to_string()
-            } else {
-                String::new()
-            };
             actions.push(default);
         }
+    }
+    order_actions(actions);
+}
+
+pub fn order_actions(actions: &mut [ActionItem]) {
+    if let Some(index) = actions.iter().position(ActionItem::is_pinned) {
+        actions[index..].rotate_left(1);
+    }
+    for (index, action) in actions.iter_mut().enumerate() {
+        action.shortcut = if index < 9 {
+            (index + 1).to_string()
+        } else {
+            String::new()
+        };
     }
 }
 
@@ -144,9 +157,24 @@ pub fn standard_languages() -> &'static [LanguageChoice] {
 #[cfg(test)]
 mod tests {
     #[test]
+    fn rewrite_moves_to_end_without_reordering_other_actions() {
+        let mut actions = super::default_actions();
+        actions.swap(5, 6);
+        let mut custom = actions[0].clone();
+        custom.id = "custom".into();
+        custom.is_builtin = false;
+        actions.push(custom);
+        super::refresh_builtins(&mut actions);
+        assert_eq!(actions[5].id, "flashcards");
+        assert_eq!(actions[6].id, "custom");
+        assert_eq!(actions[7].id, "rewrite_as");
+        assert_eq!(actions[7].shortcut, "8");
+    }
+
+    #[test]
     fn refresh_keeps_custom_prompts_and_adds_flashcards_once() {
         let mut actions = super::default_actions();
-        actions.pop();
+        actions.remove(5);
         actions[0].prompt_instruction = "Use my template".into();
         actions[1].prompt_instruction = "Old default".into();
         actions[1].default_instruction = "Old default".into();
@@ -158,7 +186,9 @@ mod tests {
             actions[1].prompt_instruction,
             actions[1].default_instruction
         );
-        assert_eq!(actions[6].id, "flashcards");
+        assert_eq!(actions[5].id, "flashcards");
+        assert_eq!(actions[5].shortcut, "6");
+        assert_eq!(actions[6].id, "rewrite_as");
         assert_eq!(actions[6].shortcut, "7");
     }
 }

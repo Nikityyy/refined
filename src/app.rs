@@ -275,11 +275,12 @@ impl eframe::App for RefinedApp {
         }
 
         // Push keybind changes from Settings to the hotkey listener.
+        let hud_open = self.hud.lock().unwrap().is_visible;
         {
             let mut store = self.store.lock().unwrap();
             self.studio.sync_models(ctx, &mut store.settings.groq);
             self.studio.sync_updates(ctx);
-            if self.studio.restart_for_update(&mut store) {
+            if self.studio.restart_for_update(&mut store, hud_open) {
                 self.quitting.store(true, Ordering::Relaxed);
                 ctx.send_viewport_cmd(ViewportCommand::Close);
                 return;
@@ -368,6 +369,7 @@ nonsense, which is a very serious problem for publishing.\n";
             theme::setup_custom_fonts(&ctx);
             self.fonts_loaded = true;
         }
+        let hud_open = hud_layout.is_some();
         if let Some((position, height)) = hud_layout {
             let hud = self.hud.clone();
             let store = self.store.clone();
@@ -449,7 +451,8 @@ nonsense, which is a very serious problem for publishing.\n";
                     self.studio.hotkey_failed = self
                         .hotkey_failed
                         .load(std::sync::atomic::Ordering::Relaxed);
-                    self.studio.update(ui, &mut store_guard, &spectrum_theme);
+                    self.studio
+                        .update(ui, &mut store_guard, &spectrum_theme, hud_open);
                 });
         } else {
             // Hiding the Studio can strand a debounced settings save that

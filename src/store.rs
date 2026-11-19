@@ -1,6 +1,6 @@
 //! Local persistent store for Refined settings, actions, and history.
 
-use crate::actions::{default_actions, refresh_builtins, ActionItem};
+use crate::actions::{default_actions, order_actions, refresh_builtins, ActionItem};
 use crate::groq::GroqConfig;
 use crate::history::HistoryEntry;
 use serde::{Deserialize, Serialize};
@@ -207,36 +207,28 @@ impl Store {
 
     pub fn add_custom_action(&mut self, action: ActionItem) {
         self.settings.actions.push(action);
-        self.renumber_action_keys();
+        order_actions(&mut self.settings.actions);
         self.save_settings();
     }
 
     pub fn delete_custom_action(&mut self, id: &str) {
         self.settings.actions.retain(|a| a.id != id);
-        self.renumber_action_keys();
+        order_actions(&mut self.settings.actions);
         self.save_settings();
     }
 
     /// Action order is user-defined (Studio), so the number shortcuts are
     /// positional: row 1 answers to key 1, whatever the action is.
     pub fn move_action(&mut self, from: usize, to: usize) {
-        if from == to || from >= self.settings.actions.len() || to >= self.settings.actions.len()
+        let actions = &mut self.settings.actions;
+        if from == to || from >= actions.len() || to >= actions.len()
+            || actions[from].is_pinned() || actions[to].is_pinned()
         {
             return;
         }
-        self.settings.actions.swap(from, to);
-        self.renumber_action_keys();
+        actions.swap(from, to);
+        order_actions(actions);
         self.save_settings();
-    }
-
-    fn renumber_action_keys(&mut self) {
-        for (i, action) in self.settings.actions.iter_mut().enumerate() {
-            action.shortcut = if i < 9 {
-                (i + 1).to_string()
-            } else {
-                String::new()
-            };
-        }
     }
 
     pub fn reset_action_to_default(&mut self, id: &str) {
@@ -262,4 +254,28 @@ fn read_json_bom_tolerant<T: serde::de::DeserializeOwned>(path: &std::path::Path
     let text = std::fs::read_to_string(path).ok()?;
     let trimmed = text.trim_start_matches('\u{feff}');
     serde_json::from_str(trimmed).ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn update_restart_requires_a_closed_palette_and_a_fresh_click() {
+        let mut store = Store {
+            settings: AppSettings::default(),
+            history: Vec::new(),
+            data_dir: PathBuf::new(),
+            history_loaded: false,
+        };
+        let mut studio = crate::studio::Studio::new();
+        studio.update_state = Some(crate::updater::UpdateState::Ready {
+            version: "0.3.2".into(),
+            checksum: String::new(),
+        });
+        studio.pending_restart = true;
+        assert!(!studio.restart_for_update(&mut store, true));
+        assert!(!studio.restart_for_update(&mut store, false));
+        assert!(matches!(studio.update_state, Some(crate::updater::UpdateState::Ready { .. })));
+    }
 }

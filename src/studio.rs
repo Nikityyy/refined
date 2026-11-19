@@ -120,8 +120,8 @@ impl Studio {
         }
     }
 
-    pub fn restart_for_update(&mut self, store: &mut Store) -> bool {
-        if !std::mem::take(&mut self.pending_restart) {
+    pub fn restart_for_update(&mut self, store: &mut Store, hud_open: bool) -> bool {
+        if !std::mem::take(&mut self.pending_restart) || hud_open {
             return false;
         }
         self.flush_pending_now(store);
@@ -226,7 +226,7 @@ impl Studio {
     }
 
     /// The update banner body. Callers wrap it in the quiet alert style.
-    fn render_update_banner(&mut self, ui: &mut Ui, theme: &SpectrumTheme, msg: &str) {
+    fn render_update_banner(&mut self, ui: &mut Ui, theme: &SpectrumTheme, msg: &str, hud_open: bool) {
         egui::Frame::new()
             .fill(theme.accent_badge_bg)
             .stroke(Stroke::new(1.0, theme.border))
@@ -246,7 +246,10 @@ impl Studio {
                             .color(theme.accent_badge_text),
                     );
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        if spectrum_button(ui, Some(icons::REFRESH), "Restart now", true, theme).clicked() {
+                        let restart = ui.add_enabled_ui(!hud_open, |ui| {
+                            spectrum_button(ui, Some(icons::REFRESH), "Restart now", true, theme)
+                        }).inner.on_disabled_hover_text("Close the edit palette to restart.");
+                        if restart.clicked() {
                             self.pending_restart = true;
                         }
                     });
@@ -286,7 +289,7 @@ impl Studio {
         });
     }
 
-    pub fn update(&mut self, ui: &mut Ui, store: &mut Store, theme: &SpectrumTheme) {
+    pub fn update(&mut self, ui: &mut Ui, store: &mut Store, theme: &SpectrumTheme, hud_open: bool) {
         self.flush_settings(store);
         store.load_history();
 
@@ -357,7 +360,7 @@ impl Studio {
         ui.add_space(9.0);
 
         if let Some(UpdateState::Ready { version, .. }) = &self.update_state {
-            self.render_update_banner(ui, theme, &format!("Refined {version} is ready to install."));
+            self.render_update_banner(ui, theme, &format!("Refined {version} is ready to install."), hud_open);
         }
 
         if self.current_tab != StudioTab::History {
@@ -1050,7 +1053,8 @@ impl Studio {
                 ui.spacing_mut().item_spacing = Vec2::new(8.0, 10.0);
 
                 let actions = &mut store.settings.actions;
-                let actions_total = actions.len();
+                let has_pinned_action = actions.last().is_some_and(ActionItem::is_pinned);
+                let movable_count = actions.len() - usize::from(has_pinned_action);
                 for (idx, action) in actions.iter_mut().enumerate() {
                     card_frame(theme, egui::Margin::same(12))
                         .show(ui, |ui| {
@@ -1092,7 +1096,7 @@ impl Studio {
                                     // Reorder controls: the list order is the
                                     // user's, and number keys follow position.
                                     if ui.add_enabled(
-                                        idx > 0,
+                                        idx > 0 && idx < movable_count,
                                         egui::Button::new(
                                             RichText::new(icons::UP)
                                                 .font(FontId::proportional(12.0))
@@ -1101,13 +1105,13 @@ impl Studio {
                                         .fill(Color32::TRANSPARENT)
                                         .stroke(Stroke::NONE),
                                     ).on_hover_text("Move up")
-                                    .on_disabled_hover_text("Already at the top")
+                                    .on_disabled_hover_text(if action.is_pinned() { "Rewrite as always stays last" } else { "Already at the top" })
                                     .clicked()
                                     {
                                         move_action = Some((idx, idx - 1));
                                     }
                                     if ui.add_enabled(
-                                        idx + 1 < actions_total,
+                                        idx + 1 < movable_count,
                                         egui::Button::new(
                                             RichText::new(icons::DOWN)
                                                 .font(FontId::proportional(12.0))
@@ -1116,7 +1120,7 @@ impl Studio {
                                         .fill(Color32::TRANSPARENT)
                                         .stroke(Stroke::NONE),
                                     ).on_hover_text("Move down")
-                                    .on_disabled_hover_text("Already at the bottom")
+                                    .on_disabled_hover_text(if has_pinned_action { "Rewrite as always stays last" } else { "Already at the bottom" })
                                     .clicked()
                                     {
                                         move_action = Some((idx, idx + 1));

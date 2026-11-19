@@ -1,6 +1,6 @@
 [package]
 name = "refined"
-version = "0.3.0"
+version = "0.3.1"
 edition = "2021"
 description = "AI text refiner for Windows: select text anywhere, press Alt+V, get polished text back in place."
 license = "MIT"
