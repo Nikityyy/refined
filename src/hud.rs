@@ -4,21 +4,33 @@ use crate::actions::{standard_languages, ActionItem};
 use crate::diff::{compute_diff, DiffChunk, DiffStats};
 use crate::groq::{complete_action, GroqConfig};
 use crate::history::HistoryEntry;
+use crate::store::AppSettings;
 use crate::theme::{icons, kbd_button, render_diff_view, SpectrumTheme};
-use eframe::egui::{self, Color32, CornerRadius, FontId, Key, Pos2, RichText, Sense, Stroke, Ui, Vec2};
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::mpsc::{channel, Receiver, Sender};
-use std::sync::Arc;
+use eframe::egui::{
+    self, Color32, CornerRadius, FontId, Key, Pos2, RichText, Sense, Stroke, Ui, Vec2,
+};
+use std::sync::mpsc::{channel, Receiver};
+use std::time::Duration;
 use windows::Win32::Foundation::{HWND, POINT};
 use windows::Win32::Graphics::Gdi::{
     GetMonitorInfoW, MonitorFromPoint, MONITORINFO, MONITOR_DEFAULTTONEAREST,
 };
 
+pub const WIDTH: f32 = 480.0;
+
+pub fn viewport_id() -> egui::ViewportId {
+    egui::ViewportId::from_hash_of("refined_hud")
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum HudState {
     SelectingAction,
-    RewriteAsInput { action_idx: usize },
-    Processing { action_name: String },
+    RewriteAsInput {
+        action_idx: usize,
+    },
+    Processing {
+        action_name: String,
+    },
     DiffView {
         original_text: String,
         refined_text: String,
@@ -27,6 +39,7 @@ pub enum HudState {
         action_name: String,
         model: String,
         duration_ms: u128,
+        applied: bool,
     },
 }
 
@@ -46,6 +59,7 @@ pub enum HudWorkerMsg {
 
 pub struct Hud {
     pub is_visible: bool,
+    pub presented: bool,
     pub state: HudState,
     pub original_text: String,
     pub target_hwnd: isize,
@@ -53,20 +67,23 @@ pub struct Hud {
     pub custom_rewrite_input: String,
     pub error_message: Option<String>,
     pub position: Pos2,
-    pub worker_rx: Option<Receiver<HudWorkerMsg>>,
-    pub worker_tx: Sender<HudWorkerMsg>,
-    pub just_opened: bool,
+    worker_rx: Option<Receiver<HudWorkerMsg>>,
+    seen_focus: bool,
+    outside_input_down: bool,
+    focus_requested: bool,
+    awaiting_paste_blur: bool,
+    focus_rewrite: bool,
     /// Demo mode: do not auto-dismiss on focus loss (so the UI can be inspected).
     pub demo_sticky: bool,
-    /// Height the diff view measured for its own content - the window hugs
-    /// the diff instead of leaving dead space below the buttons. Assembled
-    /// from cursor landmarks (see render_ui), never from the window's
-    /// current size, so it cannot feed on its own resize lag.
-    pub measured_diff_height: f32,
-    /// Generation token: bumped whenever an old run must be invalidated
-    /// (HUD re-opened, closed, or a new action triggered). A worker whose
-    /// generation is stale must never paste into the user's window.
-    generation: Arc<AtomicU64>,
+}
+
+fn outside_input_down() -> bool {
+    use windows::Win32::UI::Input::KeyboardAndMouse::{
+        GetAsyncKeyState, VK_ESCAPE, VK_LBUTTON, VK_MBUTTON, VK_RBUTTON,
+    };
+    [VK_LBUTTON, VK_RBUTTON, VK_MBUTTON, VK_ESCAPE]
+        .iter()
+        .any(|key| unsafe { GetAsyncKeyState(i32::from(key.0)) < 0 })
 }
 
 /// The effective output language for a run: the custom language whenever the
@@ -81,7 +98,10 @@ fn resolved_language<'a>(selected: &'a str, custom: &'a str) -> &'a str {
 
 /// Computes multi-monitor clamped HUD position using Win32 monitor coordinates.
 pub fn compute_clamped_hud_pos(cursor_x: i32, cursor_y: i32, width: f32, height: f32) -> Pos2 {
-    let pt = POINT { x: cursor_x, y: cursor_y };
+    let pt = POINT {
+        x: cursor_x,
+        y: cursor_y,
+    };
     let mut min_x = 0;
     let mut max_x = 1920;
     let mut min_y = 0;
@@ -106,17 +126,23 @@ pub fn compute_clamped_hud_pos(cursor_x: i32, cursor_y: i32, width: f32, height:
     let desired_x = (cursor_x - 20) as f32;
     let desired_y = (cursor_y + 15) as f32;
 
-    let clamped_x = desired_x.clamp((min_x + 12) as f32, (max_x - 12) as f32 - width);
-    let clamped_y = desired_y.clamp((min_y + 12) as f32, (max_y - 12) as f32 - height);
+    let clamped_x = desired_x.clamp(
+        (min_x + 12) as f32,
+        ((max_x - 12) as f32 - width).max((min_x + 12) as f32),
+    );
+    let clamped_y = desired_y.clamp(
+        (min_y + 12) as f32,
+        ((max_y - 12) as f32 - height).max((min_y + 12) as f32),
+    );
 
     Pos2::new(clamped_x, clamped_y)
 }
 
 impl Hud {
     pub fn new() -> Self {
-        let (worker_tx, worker_rx) = channel();
         Self {
             is_visible: false,
+            presented: false,
             state: HudState::SelectingAction,
             original_text: String::new(),
             target_hwnd: 0,
@@ -124,56 +150,134 @@ impl Hud {
             custom_rewrite_input: String::new(),
             error_message: None,
             position: Pos2::new(200.0, 200.0),
-            worker_rx: Some(worker_rx),
-            worker_tx,
-            just_opened: false,
+            worker_rx: None,
+            seen_focus: false,
+            outside_input_down: false,
+            focus_requested: false,
+            awaiting_paste_blur: false,
+            focus_rewrite: false,
             demo_sticky: false,
-            measured_diff_height: 430.0,
-            generation: Arc::new(AtomicU64::new(0)),
         }
     }
 
     pub fn open(&mut self, text: String, x: i32, y: i32, target_hwnd: isize) {
         // Invalidate any in-flight run from a previous HUD session.
-        self.generation.fetch_add(1, Ordering::Relaxed);
+        self.worker_rx = None;
         self.original_text = text;
         self.target_hwnd = target_hwnd;
         self.is_visible = true;
+        self.presented = false;
         self.state = HudState::SelectingAction;
         self.selected_index = 0;
         self.custom_rewrite_input.clear();
         self.error_message = None;
-        self.just_opened = true;
-        // Clamp against the tallest state the HUD can grow into (the diff
-        // view is 430 px); a stale 360 px floor let the last rows of the
-        // diff sit below the work area.
-        self.position = compute_clamped_hud_pos(x, y, 480.0, 430.0);
+        self.seen_focus = false;
+        self.outside_input_down = outside_input_down();
+        self.focus_requested = false;
+        self.awaiting_paste_blur = false;
+        // Reserve room for the expanded palette and an inline error.
+        self.position = compute_clamped_hud_pos(x, y, WIDTH, 530.0);
     }
 
     pub fn close(&mut self) {
         self.is_visible = false;
+        self.presented = false;
         self.state = HudState::SelectingAction;
         self.error_message = None;
         // Invalidate any in-flight worker so its completion is dropped.
-        self.generation.fetch_add(1, Ordering::Relaxed);
+        self.worker_rx = None;
     }
 
-    pub fn desired_height(&self, action_count: usize) -> f32 {
-        match &self.state {
-            HudState::SelectingAction => {
-                // One quiet header row (32) + single-line rows (34 incl. 2px gap).
-                (44.0 + action_count as f32 * 34.0).clamp(160.0, 460.0)
+    pub fn present(&mut self, ctx: &egui::Context) {
+        use windows::core::{w, PCWSTR};
+        use windows::Win32::Graphics::Dwm::{
+            DwmSetWindowAttribute, DWMWA_TRANSITIONS_FORCEDISABLED, DWMWA_WINDOW_CORNER_PREFERENCE,
+            DWMWCP_ROUND,
+        };
+        use windows::Win32::UI::WindowsAndMessaging::FindWindowW;
+
+        // Winit creates the window hidden so its initial position and the
+        // first GL frame can be ready before DWM presents the palette.
+        if let Ok(hwnd) = unsafe { FindWindowW(PCWSTR::null(), w!("Refined HUD")) } {
+            let disable_transitions: i32 = 1;
+            unsafe {
+                let _ = DwmSetWindowAttribute(
+                    hwnd,
+                    DWMWA_TRANSITIONS_FORCEDISABLED,
+                    std::ptr::from_ref(&disable_transitions).cast(),
+                    std::mem::size_of_val(&disable_transitions) as u32,
+                );
+                let _ = DwmSetWindowAttribute(
+                    hwnd,
+                    DWMWA_WINDOW_CORNER_PREFERENCE,
+                    std::ptr::from_ref(&DWMWCP_ROUND).cast(),
+                    std::mem::size_of_val(&DWMWCP_ROUND) as u32,
+                );
             }
-            HudState::RewriteAsInput { .. } => 210.0,
-            HudState::Processing { .. } => 150.0,
-            HudState::DiffView { .. } => self.measured_diff_height.clamp(240.0, 430.0),
         }
+        self.presented = true;
+        self.focus_requested = true;
+        ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+        ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+    }
+
+    pub fn close_window(&mut self, ctx: &egui::Context) {
+        self.close();
+        ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+        ctx.send_viewport_cmd_to(
+            egui::ViewportId::ROOT,
+            egui::ViewportCommand::RequestPaintWhileHidden,
+        );
+        ctx.request_repaint_of(egui::ViewportId::ROOT);
+    }
+
+    pub fn dismiss_requested(&mut self, ui: &Ui) -> bool {
+        if ui.input(|i| i.viewport().close_requested()) {
+            return true;
+        }
+        if self.demo_sticky {
+            return false;
+        }
+        let input_down = outside_input_down();
+        let pressed = input_down && !self.outside_input_down;
+        self.outside_input_down = input_down;
+        if ui.input(|i| i.focused) {
+            self.seen_focus = !self.awaiting_paste_blur;
+            return false;
+        }
+        if std::mem::take(&mut self.awaiting_paste_blur) {
+            self.seen_focus = false;
+        }
+        if !self.focus_requested {
+            self.focus_requested = true;
+            ui.ctx().send_viewport_cmd(egui::ViewportCommand::Focus);
+        }
+        // The native paste intentionally transfers focus to the editor.
+        // While the diff is unfocused, a subsequent click or Esc dismisses it.
+        ui.ctx().request_repaint_after(Duration::from_millis(24));
+        self.seen_focus || pressed
+    }
+
+    pub fn desired_height(&self, settings: &AppSettings) -> f32 {
+        let action_rows = settings.actions.len().min(9);
+        (48.0 + action_rows as f32 * 37.0).max(274.0)
+            + if settings.selected_language == "custom" {
+                32.0
+            } else {
+                0.0
+            }
+            + if self.error_message.is_some() {
+                72.0
+            } else {
+                0.0
+            }
     }
 
     /// Activates the action at `idx`: rewrite-as actions open the custom
     /// instruction input; everything else is triggered immediately.
     pub fn activate(
         &mut self,
+        ctx: &egui::Context,
         actions: &[ActionItem],
         idx: usize,
         groq_config: &GroqConfig,
@@ -181,25 +285,28 @@ impl Hud {
     ) {
         self.selected_index = idx;
         if actions[idx].is_rewrite_as {
+            self.focus_rewrite = true;
             self.state = HudState::RewriteAsInput { action_idx: idx };
         } else {
-            self.trigger_action(&actions[idx], None, groq_config, language);
+            self.trigger_action(ctx, &actions[idx], None, groq_config, language);
         }
     }
 
     pub fn trigger_action(
         &mut self,
+        ctx: &egui::Context,
         action: &ActionItem,
         user_override: Option<&str>,
         groq_config: &GroqConfig,
         language: &str,
     ) {
         let original = self.original_text.clone();
-        let target_hwnd = self.target_hwnd;
         let config = groq_config.clone();
         let lang = language.to_string();
-        let tx = self.worker_tx.clone();
-        let generation = self.generation.clone();
+        let (tx, rx) = channel();
+        self.worker_rx = Some(rx);
+        self.error_message = None;
+        let ctx = ctx.clone();
 
         let mut instruction = action.prompt_instruction.clone();
         if action.is_rewrite_as {
@@ -217,53 +324,25 @@ impl Hud {
         self.state = HudState::Processing {
             action_name: action_name.clone(),
         };
-        // Invalidate every previously in-flight run; this one owns the HUD.
-        let my_gen = self.generation.fetch_add(1, Ordering::Relaxed) + 1;
-
         std::thread::spawn(move || {
-            match complete_action(&config, &instruction, &original, &lang) {
+            let msg = match complete_action(&config, &instruction, &original, &lang) {
                 Ok(resp) => {
-                    // A newer generation means the user closed the HUD or
-                    // started another action while this request was in
-                    // flight: never paste, never record history.
-                    if generation.load(Ordering::Relaxed) != my_gen {
-                        return;
-                    }
-
-                    // Belt and braces beside the groq.rs check: an empty
-                    // result must never replace the selection.
-                    if resp.text.trim().is_empty() {
-                        let _ = tx.send(HudWorkerMsg::Error(
-                            "The model returned an empty response. Your text was left unchanged."
-                                .to_string(),
-                        ));
-                        return;
-                    }
-
-                    // 1. Immediately replace selected text in the active application window
-                    let hwnd = HWND(target_hwnd as *mut std::ffi::c_void);
-                    crate::clipboard::replace_selection_in_target(hwnd, &resp.text);
-
-                    // 2. Compute visual diff
-                    let (chunks, stats) = compute_diff(&original, &resp.text);
-
-                    let _ = tx.send(HudWorkerMsg::Success {
+                    let (diff_chunks, stats) = compute_diff(&original, &resp.text);
+                    HudWorkerMsg::Success {
                         refined_text: resp.text,
-                        diff_chunks: chunks,
+                        diff_chunks,
                         stats,
                         action_name,
                         action_id,
                         model: resp.model,
                         duration_ms: resp.duration_ms,
                         language: lang,
-                    });
-                }
-                Err(err) => {
-                    if generation.load(Ordering::Relaxed) != my_gen {
-                        return;
                     }
-                    let _ = tx.send(HudWorkerMsg::Error(err));
                 }
+                Err(err) => HudWorkerMsg::Error(err),
+            };
+            if tx.send(msg).is_ok() {
+                ctx.request_repaint_of(viewport_id());
             }
         });
     }
@@ -273,59 +352,63 @@ impl Hud {
         ctx: &egui::Context,
         on_save_history: &mut dyn FnMut(HistoryEntry),
     ) {
-        if let Some(ref rx) = self.worker_rx {
-            while let Ok(msg) = rx.try_recv() {
-                match msg {
-                    HudWorkerMsg::Success {
-                        refined_text,
-                        diff_chunks,
-                        stats,
-                        action_name,
-                        action_id,
-                        model,
-                        duration_ms,
-                        language,
-                    } => {
-                        let entry = HistoryEntry::new(
-                            action_id,
-                            action_name.clone(),
-                            self.original_text.clone(),
-                            refined_text.clone(),
-                            diff_chunks.clone(),
-                            stats.clone(),
-                            model.clone(),
-                            duration_ms,
-                            language,
-                        );
-                        on_save_history(entry);
-
-                        self.state = HudState::DiffView {
-                            original_text: self.original_text.clone(),
-                            refined_text,
-                            diff_chunks,
-                            stats,
-                            action_name,
-                            model,
-                            duration_ms,
-                        };
-                        // Start from the full box; the first rendered frame
-                        // re-measures deterministically (cursor landmarks,
-                        // not window size) and the window shrinks to its
-                        // content once, with no feedback loop.
-                        self.measured_diff_height = 430.0;
-                        ctx.request_repaint();
-                    }
-                    HudWorkerMsg::Error(err) => {
-                        // Mirrors the on-screen error to stderr so failures are
-                        // diagnosable when launching from a console.
-                        eprintln!("[refined] action failed: {err}");
-                        self.error_message = Some(err);
-                        self.state = HudState::SelectingAction;
-                        ctx.request_repaint();
-                    }
+        let Some(rx) = &self.worker_rx else { return };
+        let msg = match rx.try_recv() {
+            Ok(msg) => msg,
+            Err(std::sync::mpsc::TryRecvError::Empty) => return,
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                HudWorkerMsg::Error("Refinement ended unexpectedly. Try again.".into())
+            }
+        };
+        self.worker_rx = None;
+        match msg {
+            HudWorkerMsg::Success {
+                refined_text,
+                diff_chunks,
+                stats,
+                action_name,
+                action_id,
+                model,
+                duration_ms,
+                language,
+            } => {
+                let hwnd = HWND(self.target_hwnd as *mut std::ffi::c_void);
+                let changed = self.original_text != refined_text;
+                let applied =
+                    changed && crate::clipboard::replace_selection_in_target(hwnd, &refined_text);
+                if changed && self.target_hwnd != 0 {
+                    self.awaiting_paste_blur = true;
+                    self.focus_requested = true;
+                    self.seen_focus = false;
                 }
+                on_save_history(HistoryEntry::new(
+                    action_id,
+                    action_name.clone(),
+                    self.original_text.clone(),
+                    refined_text.clone(),
+                    diff_chunks.clone(),
+                    stats.clone(),
+                    model.clone(),
+                    duration_ms,
+                    language,
+                ));
+                self.state = HudState::DiffView {
+                    original_text: self.original_text.clone(),
+                    refined_text,
+                    diff_chunks,
+                    stats,
+                    action_name,
+                    model,
+                    duration_ms,
+                    applied,
+                };
+            }
+            HudWorkerMsg::Error(err) => {
+                self.error_message = Some(err);
+                self.state = HudState::SelectingAction;
             }
         }
+        ctx.request_repaint();
     }
 
     /// Renders the action list rows; returns the index of a row that was
@@ -337,6 +420,7 @@ impl Hud {
         ui: &mut Ui,
         actions: &[ActionItem],
         theme: &SpectrumTheme,
+        follow_selection: bool,
     ) -> Option<usize> {
         let mut clicked_idx = None;
         let row_h = 32.0;
@@ -344,10 +428,12 @@ impl Hud {
 
         for (idx, action) in actions.iter().enumerate() {
             let is_selected = idx == self.selected_index;
-            let (rect, response) =
-                ui.allocate_exact_size(Vec2::new(width, row_h), Sense::click());
+            let (rect, response) = ui.allocate_exact_size(Vec2::new(width, row_h), Sense::click());
             if response.clicked() {
                 clicked_idx = Some(idx);
+            }
+            if follow_selection && is_selected {
+                response.scroll_to_me(None);
             }
 
             // Spectrum selection is a quiet fill, never an accent outline.
@@ -356,8 +442,7 @@ impl Hud {
             } else {
                 Color32::TRANSPARENT
             };
-            ui.painter()
-                .rect_filled(rect, CornerRadius::same(4), bg);
+            ui.painter().rect_filled(rect, CornerRadius::same(4), bg);
 
             let pad = 10.0;
 
@@ -365,7 +450,11 @@ impl Hud {
             let icon_galley = ui.painter().layout(
                 action.icon.clone(),
                 FontId::proportional(16.0),
-                if is_selected { theme.accent_visual } else { theme.text_secondary },
+                if is_selected {
+                    theme.accent_visual
+                } else {
+                    theme.text_secondary
+                },
                 f32::INFINITY,
             );
             let icon_cx = rect.left() + pad + 10.0;
@@ -436,13 +525,14 @@ impl Hud {
     pub fn render_ui(
         &mut self,
         ui: &mut Ui,
-        actions: &[ActionItem],
-        groq_config: &GroqConfig,
-        selected_language: &mut String,
-        custom_language: &mut String,
+        settings: &mut AppSettings,
         theme: &SpectrumTheme,
         on_open_studio: &mut dyn FnMut(),
     ) {
+        let actions = &settings.actions;
+        let groq_config = &settings.groq;
+        let selected_language = &mut settings.selected_language;
+        let custom_language = &mut settings.custom_language;
         let ctx = ui.ctx().clone();
 
         // Global Esc to close HUD. Inside the rewrite-as input Esc means
@@ -514,8 +604,7 @@ impl Hud {
                 // buttons, scoped so TextEdits keep their own surfaces.
                 ui.scope(|ui| {
                     ui.style_mut().visuals.widgets.inactive.bg_fill = Color32::TRANSPARENT;
-                    ui.style_mut().visuals.widgets.inactive.bg_stroke =
-                        Stroke::NONE;
+                    ui.style_mut().visuals.widgets.inactive.bg_stroke = Stroke::NONE;
                     ui.style_mut().visuals.widgets.hovered.bg_fill = theme.surface_hover;
                     ui.style_mut().visuals.widgets.hovered.bg_stroke = Stroke::NONE;
                     ui.style_mut().visuals.widgets.active.bg_fill = theme.surface_active;
@@ -543,7 +632,7 @@ impl Hud {
             });
         });
 
-        if *selected_language == "custom" {
+        if *selected_language == "custom" && !matches!(self.state, HudState::DiffView { .. }) {
             ui.horizontal(|ui| {
                 ui.label(
                     RichText::new("Language:")
@@ -564,23 +653,32 @@ impl Hud {
                     .corner_radius(CornerRadius::same(4))
                     .inner_margin(egui::Margin::same(8))
                     .show(ui, |ui| {
-                        ui.label(RichText::new(format!("{} {}", icons::WARNING, err)).color(theme.diff_del_text).font(FontId::proportional(12.0)));
+                        ui.label(
+                            RichText::new(format!("{} {}", icons::WARNING, err))
+                                .color(theme.diff_del_text)
+                                .font(FontId::proportional(12.0)),
+                        );
                     });
             });
             ui.add_space(6.0);
         }
 
         let should_close = std::cell::Cell::new(false);
-        // DiffView cursor landmarks for the content-height measurement below.
-        let mut diff_metrics: Option<(f32, f32, f32, f32, bool)> = None;
 
         match &self.state {
             HudState::SelectingAction => {
+                let previous_index = self.selected_index;
                 let action_count = actions.len();
-                if ctx.input(|i| i.key_pressed(Key::ArrowDown)) {
+                if action_count == 0 {
+                    ui.label("Add an action in Refined Studio.");
+                    return;
+                }
+                self.selected_index = self.selected_index.min(action_count - 1);
+                let shortcuts = !ctx.egui_wants_keyboard_input() && !egui::Popup::is_any_open(&ctx);
+                if shortcuts && ctx.input(|i| i.key_pressed(Key::ArrowDown)) {
                     self.selected_index = (self.selected_index + 1) % action_count;
                 }
-                if ctx.input(|i| i.key_pressed(Key::ArrowUp)) {
+                if shortcuts && ctx.input(|i| i.key_pressed(Key::ArrowUp)) {
                     self.selected_index = (self.selected_index + action_count - 1) % action_count;
                 }
 
@@ -599,35 +697,43 @@ impl Hud {
                         _ => None,
                     };
                     if let Some(k) = key_opt {
-                        if ctx.input(|i| i.key_pressed(k)) {
+                        if shortcuts && ctx.input(|i| i.modifiers.is_none() && i.key_pressed(k)) {
                             let lang = resolved_language(selected_language, custom_language);
-                            self.activate(actions, idx, groq_config, lang);
+                            self.activate(&ctx, actions, idx, groq_config, lang);
                             return;
                         }
                     }
                 }
 
-                if ctx.input(|i| i.key_pressed(Key::Enter)) {
+                if shortcuts && ctx.input(|i| i.key_pressed(Key::Enter)) {
                     let lang = resolved_language(selected_language, custom_language);
-                    self.activate(actions, self.selected_index, groq_config, lang);
+                    self.activate(&ctx, actions, self.selected_index, groq_config, lang);
                     return;
                 }
 
                 // Render action items list in a scrollable container so
                 // every row stays reachable even with many custom actions.
                 egui::ScrollArea::vertical()
-                    .max_height(340.0)
+                    .max_height(ui.available_height())
                     .auto_shrink([false, true])
                     .show(ui, |ui| {
                         ui.set_width(ui.available_width());
-                        if let Some(idx) = self.render_action_list(ui, actions, theme) {
+                        if let Some(idx) = self.render_action_list(
+                            ui,
+                            actions,
+                            theme,
+                            previous_index != self.selected_index,
+                        ) {
                             let lang = resolved_language(selected_language, custom_language);
-                            self.activate(actions, idx, groq_config, lang);
+                            self.activate(&ctx, actions, idx, groq_config, lang);
                         }
                     });
             }
             HudState::RewriteAsInput { action_idx } => {
-                let action = &actions[*action_idx];
+                let Some(action) = actions.get(*action_idx) else {
+                    self.state = HudState::SelectingAction;
+                    return;
+                };
                 let lang = resolved_language(selected_language, custom_language);
                 ui.label(
                     RichText::new(format!("{} {}", icons::EDIT, action.name))
@@ -647,10 +753,11 @@ impl Hud {
                         .hint_text("e.g. executive summary, academic style, bullet points...")
                         .desired_width(f32::INFINITY),
                 );
-                edit.request_focus();
+                if std::mem::take(&mut self.focus_rewrite) {
+                    edit.request_focus();
+                }
 
-                let mut submitted =
-                    edit.lost_focus() && ctx.input(|i| i.key_pressed(Key::Enter));
+                let mut submitted = edit.lost_focus() && ctx.input(|i| i.key_pressed(Key::Enter));
 
                 ui.add_space(8.0);
                 ui.horizontal(|ui| {
@@ -665,7 +772,7 @@ impl Hud {
 
                 if submitted {
                     let input = self.custom_rewrite_input.clone();
-                    self.trigger_action(action, Some(&input), groq_config, lang);
+                    self.trigger_action(&ctx, action, Some(&input), groq_config, lang);
                 }
             }
             HudState::Processing { action_name } => {
@@ -676,7 +783,7 @@ impl Hud {
                     .unwrap_or(&groq_config.model)
                     .to_string();
                 ui.vertical_centered(|ui| {
-                    ui.add_space(8.0);
+                    ui.add_space((ui.available_height() - 102.0).max(0.0) / 2.0);
                     ui.spinner();
                     ui.add_space(8.0);
                     ui.label(
@@ -707,11 +814,15 @@ impl Hud {
                 action_name,
                 model,
                 duration_ms,
+                applied,
             } => {
-                // Layout follows the Notion AI / Google Docs pattern: one calm
-                // headline stating what happened, one sentence telling the user
-                // their text was already replaced and undo is available, then
-                // the inline diff, then three clear verbs.
+                let status = if *applied || self.demo_sticky {
+                    format!("{action_name} applied")
+                } else if original_text == refined_text {
+                    "No changes needed".into()
+                } else {
+                    "Result ready to copy".into()
+                };
                 let secs = *duration_ms as f64 / 1000.0;
                 let duration_str = if secs >= 1.0 {
                     format!("{secs:.1} s")
@@ -722,12 +833,16 @@ impl Hud {
 
                 ui.horizontal(|ui| {
                     ui.label(
-                        RichText::new(icons::CHECK_MARK)
-                            .font(FontId::proportional(15.0))
-                            .color(theme.diff_add_text),
+                        RichText::new(if *applied || self.demo_sticky {
+                            icons::CHECK_MARK
+                        } else {
+                            icons::COPY
+                        })
+                        .font(FontId::proportional(15.0))
+                        .color(theme.diff_add_text),
                     );
                     ui.label(
-                        RichText::new(format!("{action_name} applied"))
+                        RichText::new(status)
                             .font(FontId::proportional(15.0))
                             .color(theme.text_primary)
                             .strong(),
@@ -757,113 +872,69 @@ impl Hud {
 
                 ui.add_space(10.0);
 
-                // Captured to compute the window's exact natural height
-                // AFTER the paint: unlike `min_rect`, cursor positions do
-                // not depend on how tall the window happens to be right now,
-                // so the measurement cannot feed on its own resize lag.
-                let y_before_scroll = ui.cursor().min.y;
-
-                let scroll = egui::ScrollArea::vertical()
-                    .max_height(200.0)
-                    .auto_shrink([false, true])
+                let diff_height = (ui.available_height() - 46.0).max(40.0);
+                egui::Frame::new()
+                    .fill(theme.background)
+                    .stroke(Stroke::new(1.0, theme.border))
+                    .corner_radius(CornerRadius::same(8))
+                    .inner_margin(egui::Margin::same(12))
                     .show(ui, |ui| {
-                        // The diff reads as an inset document well: one step
-                        // below the window fill, with a real border, not a
-                        // fill that aliases the window background.
-                        egui::Frame::new()
-                            .fill(theme.background)
-                            .stroke(Stroke::new(1.0, theme.border))
-                            .corner_radius(CornerRadius::same(8))
-                            .inner_margin(egui::Margin::same(12))
+                        egui::ScrollArea::vertical()
+                            .max_height((diff_height - 26.0).max(14.0))
+                            .auto_shrink([false, false])
                             .show(ui, |ui| {
-                                // A fixed width makes the single-flow diff
-                                // wrap like a text document, not a column.
                                 ui.set_width(ui.available_width());
                                 render_diff_view(ui, diff_chunks, theme);
                             });
                     });
 
-                let scroll_h = scroll.content_size.y.min(200.0);
-                // A frame painted before the OS applied the resize shows a
-                // squeezed scroll box; its landmarks are transient noise.
-                let scroll_valid = scroll.inner_rect.height() >= scroll_h - 0.5;
-
                 ui.add_space(10.0);
-                let y_after_scroll = ui.cursor().min.y;
                 ui.horizontal(|ui| {
                     // Every verb carries an icon + label + keycap chip: one
                     // consistent pattern across the app.
                     ui.spacing_mut().item_spacing = Vec2::new(8.0, 0.0);
                     if kbd_button(ui, Some(icons::COPY), "Copy", Some("Ctrl+C"), false, theme)
                         .clicked()
-                        || (ctx.input(|i| i.modifiers.command && i.key_pressed(Key::C)))
+                        || (ctx.input_mut(|input| input.consume_key(egui::Modifiers::CTRL, Key::C)))
                     {
                         crate::clipboard::set_clipboard_text(refined_text);
                     }
 
-                    if kbd_button(ui, Some(icons::REFRESH), "Undo", Some("Ctrl+Z"), false, theme)
+                    if *applied
+                        && (kbd_button(
+                            ui,
+                            Some(icons::REFRESH),
+                            "Undo",
+                            Some("Ctrl+Z"),
+                            false,
+                            theme,
+                        )
                         .clicked()
-                        || (ctx.input(|i| i.modifiers.command && i.key_pressed(Key::Z)))
+                            || ctx.input_mut(|input| {
+                                input.consume_key(egui::Modifiers::CTRL, Key::Z)
+                            }))
                     {
                         let hwnd = HWND(self.target_hwnd as *mut std::ffi::c_void);
-                        crate::clipboard::replace_selection_in_target(hwnd, original_text);
+                        if crate::clipboard::undo_in_target(hwnd) {
+                            should_close.set(true);
+                        }
                     }
 
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if kbd_button(ui, Some(icons::CHECK_MARK), "Done", Some("Esc"), true, theme)
-                            .clicked()
+                        if kbd_button(
+                            ui,
+                            Some(icons::CHECK_MARK),
+                            "Done",
+                            Some("Esc"),
+                            true,
+                            theme,
+                        )
+                        .clicked()
                         {
                             should_close.set(true);
                         }
                     });
                 });
-
-                ui.add_space(2.0);
-                ui.label(
-                    RichText::new("Undo replaces the selection with your original text.")
-                        .font(FontId::proportional(12.0))
-                        .color(theme.text_tertiary),
-                );
-
-                diff_metrics = Some((
-                    y_before_scroll,
-                    scroll_h,
-                    y_after_scroll,
-                    ui.cursor().min.y,
-                    scroll_valid,
-                ));
-            }
-        }
-
-        // In the diff view the window hugs its content. The naive measure
-        // (`min_rect`) can include the whole window (panels fill their rect),
-        // and the OS applies a viewport resize one frame late - feeding that
-        // back ping-ponged the window between two sizes forever. Instead the
-        // natural height is assembled from cursor landmarks and the scroll
-        // area's own rect, none of which depend on the current window size:
-        // top margin/header/summary, the capped scroll box, buttons + hint,
-        // plus the panel's own margins and strokes.
-        if let Some((y_before, scroll_h, y_after, y_end, scroll_valid)) = diff_metrics {
-            if scroll_valid {
-                let h = (26.0
-                    + y_before
-                    + scroll_h
-                    + (y_end - y_after))
-                    .clamp(240.0, 430.0);
-                #[cfg(feature = "demo")]
-                if std::env::var("REFINED_DEBUG_SIZE").is_ok() {
-                    eprintln!(
-                        "[size] y_before={:.1} scroll_h={:.1} below={:.1} -> h={:.1} (current {:.1})",
-                        y_before,
-                        scroll_h,
-                        y_end - y_after,
-                        h,
-                        self.measured_diff_height
-                    );
-                }
-                if (h - self.measured_diff_height).abs() > 0.5 {
-                    self.measured_diff_height = h;
-                }
             }
         }
 

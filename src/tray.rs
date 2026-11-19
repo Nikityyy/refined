@@ -11,7 +11,12 @@ pub struct Tray {
 }
 
 impl Tray {
-    pub fn new(ctx: egui::Context, quitting: Arc<AtomicBool>, studio_open: Arc<AtomicBool>) -> Self {
+    pub fn new(
+        ctx: egui::Context,
+        quitting: Arc<AtomicBool>,
+        studio_open: Arc<AtomicBool>,
+        tooltip: String,
+    ) -> Self {
         let open_studio = MenuItem::new("Open Refined Studio", true, None);
         let quit = MenuItem::new("Quit Refined", true, None);
         let menu = Menu::new();
@@ -30,7 +35,7 @@ impl Tray {
             } = event
             {
                 studio_open_click.store(true, Ordering::Relaxed);
-                show_studio_window(&ctx_click);
+                ctx_click.request_repaint_of(egui::ViewportId::ROOT);
             }
         }));
 
@@ -40,7 +45,7 @@ impl Tray {
         MenuEvent::set_event_handler(Some(move |event: MenuEvent| {
             if event.id == open_studio_id {
                 studio_open_menu.store(true, Ordering::Relaxed);
-                show_studio_window(&ctx_menu);
+                ctx_menu.request_repaint_of(egui::ViewportId::ROOT);
             } else if event.id == quit_id {
                 quitting_clone.store(true, Ordering::Relaxed);
                 ctx_menu.send_viewport_cmd(ViewportCommand::Close);
@@ -50,7 +55,7 @@ impl Tray {
 
         let icon = TrayIconBuilder::new()
             .with_icon(Icon::from_rgba(crate::icon::rgba(32), 32, 32).expect("icon"))
-            .with_tooltip("Refined — Alt+V Text Refiner")
+            .with_tooltip(tooltip)
             .with_menu(Box::new(menu))
             .with_menu_on_left_click(false)
             .build()

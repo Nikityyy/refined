@@ -2,18 +2,23 @@
 
 use crate::hotkey::TriggerPayload;
 use crate::hud::Hud;
-use crate::store::{Store, ThemeMode};
+use crate::store::{HotkeyConfig, Store, ThemeMode};
 use crate::studio::Studio;
 #[cfg(feature = "demo")]
 use crate::studio::StudioTab;
 use crate::theme::{self, SpectrumTheme};
 use crate::tray::{self, Tray};
-use eframe::egui::{self, Color32, CornerRadius, Stroke, Ui, ViewportCommand};
-use std::sync::atomic::{AtomicBool, Ordering};
+use eframe::egui::{self, Ui, ViewportCommand, ViewportId};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::Receiver;
 use std::sync::{Arc, Mutex};
-use windows::Win32::Foundation::{CloseHandle, HANDLE, WAIT_OBJECT_0};
-use windows::Win32::System::Threading::{OpenEventW, SetEvent, WaitForSingleObject, INFINITE, SYNCHRONIZATION_SYNCHRONIZE};
+use windows::core::{w, PCWSTR};
+use windows::Win32::Foundation::{CloseHandle, HANDLE, HWND, WAIT_OBJECT_0};
+use windows::Win32::Graphics::Dwm::{DwmSetWindowAttribute, DWMWA_CLOAK};
+use windows::Win32::System::Threading::{
+    OpenEventW, SetEvent, WaitForSingleObject, INFINITE, SYNCHRONIZATION_SYNCHRONIZE,
+};
+use windows::Win32::UI::WindowsAndMessaging::{FindWindowW, IsWindowVisible};
 
 /// Demo / capture options. Compiled out of shipped binaries - the fields
 /// and the argument parser only exist in `--features demo` builds.
@@ -36,10 +41,8 @@ impl DemoOptions {
                 let (w, h) = s.split_once('x')?;
                 Some([w.parse::<f32>().ok()?, h.parse::<f32>().ok()?])
             }),
-            tab: std::env::args()
-                .find_map(|a| a.strip_prefix("--demo-tab=").map(str::to_string)),
-            run: std::env::args()
-                .find_map(|a| a.strip_prefix("--demo-run=").map(str::to_string)),
+            tab: std::env::args().find_map(|a| a.strip_prefix("--demo-tab=").map(str::to_string)),
+            run: std::env::args().find_map(|a| a.strip_prefix("--demo-run=").map(str::to_string)),
         }
     }
 
@@ -51,7 +54,7 @@ impl DemoOptions {
 
 pub struct RefinedApp {
     pub store: Arc<Mutex<Store>>,
-    pub hud: Hud,
+    pub hud: Arc<Mutex<Hud>>,
     pub studio: Studio,
     pub studio_open: Arc<AtomicBool>,
     pub _tray: Tray,
@@ -59,10 +62,15 @@ pub struct RefinedApp {
     pub hotkey_failed: Arc<AtomicBool>,
     pub quitting: Arc<AtomicBool>,
     pub restore_event: HANDLE,
-    pub _restore_listener: Option<std::thread::JoinHandle<()>>,
-    /// Last visibility state we sent to the viewport; `None` means not yet
-    /// sent. Sending `Visible(true/false)` every frame was pure churn.
-    pub studio_visible_sent: Option<bool>,
+    hotkey_listener: Option<std::thread::JoinHandle<()>>,
+    restore_listener: Option<std::thread::JoinHandle<()>>,
+    root_window_hidden: bool,
+    root_hwnd: HWND,
+    /// Live keybind shared with the hotkey thread; bumped via
+    /// `hotkey_version` after a Settings change to trigger re-registration.
+    pub hotkey: Arc<Mutex<HotkeyConfig>>,
+    pub hotkey_version: Arc<AtomicU64>,
+    pub hotkey_applied: HotkeyConfig,
     #[cfg(feature = "demo")]
     demo_hud_pending: bool,
     #[cfg(feature = "demo")]
@@ -77,26 +85,38 @@ impl RefinedApp {
         restore_event: HANDLE,
         quitting: Arc<AtomicBool>,
         initially_visible: bool,
-        #[cfg_attr(not(feature = "demo"), allow(unused_variables))]
-        demo_opts: DemoOptions,
+        #[cfg_attr(not(feature = "demo"), allow(unused_variables))] demo_opts: DemoOptions,
     ) -> Self {
-        use std::sync::mpsc;
-
         // Setup Segoe UI system fonts
         theme::setup_custom_fonts(&cc.egui_ctx);
 
         // Hotkey listener: started here, not in main, because it needs the
-        // egui context to wake the UI for immediate HUD opens on Alt+V.
-        let (hotkey_tx, hotkey_rx) = mpsc::channel();
-        let _hotkey_handle = crate::hotkey::start_hotkey_listener(
+        // egui context to wake the UI for immediate HUD opens. The combo is
+        // user-configurable; the listener re-registers when the version is
+        // bumped from `logic` after a Settings change.
+        let hotkey_cfg = { store.lock().unwrap().settings.hotkey.clone() };
+        let hotkey = Arc::new(Mutex::new(hotkey_cfg.clone()));
+        let hotkey_version = Arc::new(AtomicU64::new(1));
+        let (hotkey_tx, hotkey_rx) = std::sync::mpsc::channel();
+        let hotkey_listener = crate::hotkey::start_hotkey_listener(
             cc.egui_ctx.clone(),
             hotkey_tx,
+            hotkey.clone(),
+            hotkey_version.clone(),
             quitting.clone(),
             hotkey_failed.clone(),
         );
 
         let studio_open = Arc::new(AtomicBool::new(initially_visible));
-        let tray = Tray::new(cc.egui_ctx.clone(), quitting.clone(), studio_open.clone());
+        let tray = Tray::new(
+            cc.egui_ctx.clone(),
+            quitting.clone(),
+            studio_open.clone(),
+            format!(
+                "Refined - {}+{} Text Refiner",
+                hotkey_cfg.modifier, hotkey_cfg.key
+            ),
+        );
 
         // Persist settings once at startup so the on-disk file always
         // reflects the current schema after an app update.
@@ -109,7 +129,9 @@ impl RefinedApp {
         let restore_quitting = quitting.clone();
         let restore_studio_open = studio_open.clone();
         let restore_listener = std::thread::spawn(move || {
-            let Ok(event) = (unsafe { OpenEventW(SYNCHRONIZATION_SYNCHRONIZE, false, crate::RESTORE_EVENT) }) else {
+            let Ok(event) =
+                (unsafe { OpenEventW(SYNCHRONIZATION_SYNCHRONIZE, false, crate::RESTORE_EVENT) })
+            else {
                 return;
             };
             loop {
@@ -120,7 +142,7 @@ impl RefinedApp {
                     break;
                 }
                 restore_studio_open.store(true, Ordering::Relaxed);
-                tray::show_studio_window(&restore_ctx);
+                restore_ctx.request_repaint_of(ViewportId::ROOT);
             }
             unsafe {
                 let _ = CloseHandle(event);
@@ -133,9 +155,15 @@ impl RefinedApp {
         #[cfg(feature = "demo")]
         let demo_run_action = demo_opts.run.clone();
 
+        let root_hwnd =
+            unsafe { FindWindowW(PCWSTR::null(), w!("Refined Studio")) }.unwrap_or_default();
+        if !initially_visible {
+            set_studio_cloaked(root_hwnd, true);
+        }
+
         Self {
             store,
-            hud: Hud::new(),
+            hud: Arc::new(Mutex::new(Hud::new())),
             studio: {
                 #[cfg_attr(not(feature = "demo"), allow(unused_mut))]
                 let mut s = Studio::new();
@@ -156,13 +184,30 @@ impl RefinedApp {
             hotkey_failed,
             quitting,
             restore_event,
-            _restore_listener: Some(restore_listener),
-            studio_visible_sent: None,
+            hotkey_listener: Some(hotkey_listener),
+            restore_listener: Some(restore_listener),
+            root_window_hidden: !initially_visible,
+            root_hwnd,
+            hotkey,
+            hotkey_version,
+            hotkey_applied: hotkey_cfg,
             #[cfg(feature = "demo")]
             demo_hud_pending,
             #[cfg(feature = "demo")]
             demo_run_action,
         }
+    }
+}
+
+fn set_studio_cloaked(hwnd: HWND, hidden: bool) {
+    let cloak = i32::from(hidden);
+    unsafe {
+        let _ = DwmSetWindowAttribute(
+            hwnd,
+            DWMWA_CLOAK,
+            std::ptr::from_ref(&cloak).cast(),
+            std::mem::size_of_val(&cloak) as u32,
+        );
     }
 }
 
@@ -178,32 +223,79 @@ impl eframe::App for RefinedApp {
         unsafe {
             let _ = SetEvent(self.restore_event);
         }
-        if let Some(listener) = self._restore_listener.take() {
+        if let Some(listener) = self.restore_listener.take() {
+            let _ = listener.join();
+        }
+        if let Some(listener) = self.hotkey_listener.take() {
             let _ = listener.join();
         }
     }
 
-    fn ui(&mut self, ui: &mut Ui, _frame: &mut eframe::Frame) {
-        let ctx = ui.ctx().clone();
-
-        // Intercept Studio window close request to minimize to tray
+    fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         if ctx.input(|i| i.viewport().close_requested()) && !self.quitting.load(Ordering::Relaxed) {
             ctx.send_viewport_cmd(ViewportCommand::CancelClose);
-            ctx.send_viewport_cmd(ViewportCommand::Visible(false));
             self.studio_open.store(false, Ordering::Relaxed);
+            if self.studio.take_pending_save() {
+                self.store.lock().unwrap().save_settings();
+            }
         }
 
-        // Process Alt + V triggers from hotkey thread:
-        // Opens the floating HUD viewport directly WITHOUT unhiding the 960x680 Studio window!
-        while let Ok(payload) = self.hotkey_rx.try_recv() {
-            self.hud.open(
+        let studio_hidden = !self.studio_open.load(Ordering::Relaxed);
+        if studio_hidden {
+            if !self.root_window_hidden || unsafe { IsWindowVisible(self.root_hwnd).as_bool() } {
+                ctx.send_viewport_cmd(ViewportCommand::Visible(false));
+                // eframe can show the root after the first painted frame.
+                ctx.request_repaint();
+            }
+        } else if self.root_window_hidden {
+            set_studio_cloaked(self.root_hwnd, false);
+            tray::show_studio_window(ctx);
+        }
+        self.root_window_hidden = studio_hidden;
+
+        if let Some(payload) = self.hotkey_rx.try_iter().last() {
+            self.hud.lock().unwrap().open(
                 payload.selected_text,
                 payload.cursor_x,
                 payload.cursor_y,
                 payload.target_hwnd,
             );
-            ctx.request_repaint();
+            if studio_hidden {
+                ctx.send_viewport_cmd(ViewportCommand::RequestPaintWhileHidden);
+                ctx.request_repaint();
+            }
         }
+
+        let hud_id = crate::hud::viewport_id();
+        if ctx.input(|i| i.raw.viewports.contains_key(&hud_id)) {
+            let hud = self.hud.lock().unwrap();
+            if hud.is_visible && !hud.presented {
+                ctx.send_viewport_cmd_to(hud_id, ViewportCommand::RequestPaintWhileHidden);
+                ctx.request_repaint_of(hud_id);
+            }
+        }
+
+        // Push keybind changes from Settings to the hotkey listener.
+        {
+            let mut store = self.store.lock().unwrap();
+            self.studio.sync_models(ctx, &mut store.settings.groq);
+            self.studio.sync_updates(ctx);
+            if self.studio.restart_for_update(&mut store) {
+                self.quitting.store(true, Ordering::Relaxed);
+                ctx.send_viewport_cmd(ViewportCommand::Close);
+                return;
+            }
+            let cfg = &store.settings.hotkey;
+            if cfg != &self.hotkey_applied {
+                *self.hotkey.lock().unwrap() = cfg.clone();
+                self.hotkey_version.fetch_add(1, Ordering::Relaxed);
+                self.hotkey_applied = cfg.clone();
+            }
+        }
+    }
+
+    fn ui(&mut self, ui: &mut Ui, _frame: &mut eframe::Frame) {
+        let ctx = ui.ctx().clone();
 
         // Demo mode (`refined --demo`): open the HUD once with sample text so
         // the UI can be inspected without a text selection in another app.
@@ -218,8 +310,9 @@ impl eframe::App for RefinedApp {
                 let sample = "The replacment of human editors with AI is unlikely to happen soon, \
 because AI models are unable to distinguishes between facts and convincing-sounding \
 nonsense, which is a very serious problem for publishing.\n";
-                self.hud.open(sample.to_string(), 260, 180, 0);
-                self.hud.demo_sticky = true;
+                let mut hud = self.hud.lock().unwrap();
+                hud.open(sample.to_string(), 260, 180, 0);
+                hud.demo_sticky = true;
                 self.studio_open.store(true, Ordering::Relaxed);
                 ctx.request_repaint();
             }
@@ -243,7 +336,10 @@ nonsense, which is a very serious problem for publishing.\n";
                 }
                 if let Some(action) = found {
                     let auto = "auto".to_string();
-                    self.hud.trigger_action(&action, None, &config, &auto);
+                    self.hud
+                        .lock()
+                        .unwrap()
+                        .trigger_action(&ctx, &action, None, &config, &auto);
                 }
             }
         }
@@ -256,132 +352,99 @@ nonsense, which is a very serious problem for publishing.\n";
         let is_dark = match theme_mode {
             ThemeMode::Dark => true,
             ThemeMode::Light => false,
-            ThemeMode::System => ui.visuals().dark_mode,
+            ThemeMode::System => ctx.system_theme() != Some(egui::Theme::Light),
         };
         let spectrum_theme = SpectrumTheme::for_mode(is_dark);
         theme::configure_egui_theme(&ctx, &spectrum_theme);
 
-        // Poll any background worker messages for LLM completion
-        {
-            let mut store_guard = self.store.lock().unwrap();
-            self.hud.poll_worker(&ctx, &mut |entry| {
-                store_guard.add_history(entry);
-            });
-        }
-
-        // 1. Contextual Floating Alt+V HUD Viewport
-        if self.hud.is_visible {
-            let hud_viewport_id = egui::ViewportId::from_hash_of("refined_hud");
-            let hud_pos = self.hud.position;
-            let act_count = {
-                let s = self.store.lock().unwrap();
-                s.settings.actions.len()
-            };
-            let hud_h = self.hud.desired_height(act_count);
-
-            ctx.show_viewport_immediate(
-                hud_viewport_id,
+        let hud_layout = {
+            let hud = self.hud.lock().unwrap();
+            hud.is_visible.then(|| {
+                let store = self.store.lock().unwrap();
+                (hud.position, hud.desired_height(&store.settings))
+            })
+        };
+        if let Some((position, height)) = hud_layout {
+            let hud = self.hud.clone();
+            let store = self.store.clone();
+            let studio_open = self.studio_open.clone();
+            ctx.show_viewport_deferred(
+                crate::hud::viewport_id(),
                 egui::ViewportBuilder::default()
                     .with_title("Refined HUD")
                     .with_decorations(false)
-                    .with_transparent(true)
                     .with_always_on_top()
+                    .with_taskbar(false)
                     .with_resizable(false)
-                    .with_inner_size([480.0, hud_h])
-                    .with_position([hud_pos.x, hud_pos.y])
-                    .with_window_level(egui::WindowLevel::AlwaysOnTop),
-                |hud_ctx, _class| {
-                // Auto-dismiss HUD on focus loss (after the initial open
-                // frame) - but ONLY in the interaction states. The completion
-                // path pastes into the user's app, which by design moves OS
-                // focus there; dismissing on focus loss would then kill the
-                // HUD mid-Processing and the diff summary could never be
-                // seen. Processing and DiffView own the screen until the
-                // user acts (Done/Esc).
-                let sticky = self.hud.demo_sticky;
-                let dismissible = matches!(
-                    self.hud.state,
-                    crate::hud::HudState::SelectingAction | crate::hud::HudState::RewriteAsInput { .. }
-                );
-                if !self.hud.just_opened
-                    && !sticky
-                    && dismissible
-                    && hud_ctx.input(|i| i.viewport().focused == Some(false))
-                {
-                    self.hud.close();
-                    return;
-                }
-                    self.hud.just_opened = false;
+                    .with_inner_size([crate::hud::WIDTH, height])
+                    .with_position(position)
+                    .with_active(false)
+                    .with_visible(false),
+                move |ui, _| {
+                    let ctx = ui.ctx().clone();
+                    let mut hud = hud.lock().unwrap();
+                    if !hud.is_visible || (hud.presented && hud.dismiss_requested(ui)) {
+                        hud.close_window(&ctx);
+                        return;
+                    }
 
-                    theme::configure_egui_theme(hud_ctx, &spectrum_theme);
-
-                    egui::CentralPanel::default()
-                        .frame(
-                            egui::Frame::new()
-                                .fill(spectrum_theme.surface)
-                                .stroke(Stroke::new(1.0, spectrum_theme.border))
-                                .corner_radius(CornerRadius::same(8))
-                                .shadow(egui::epaint::Shadow {
-                                    offset: [0, 8],
-                                    blur: 24,
-                                    spread: 0,
-                                    color: Color32::from_black_alpha(if spectrum_theme.is_dark { 90 } else { 35 }),
-                                })
-                                .inner_margin(egui::Margin::same(12)),
-                        )
-                        .show(hud_ctx, |ui| {
-                            let mut store_guard = self.store.lock().unwrap();
-                            let actions = store_guard.settings.actions.clone();
-                            let groq_config = store_guard.settings.groq.clone();
-                            let mut sel_lang = store_guard.settings.selected_language.clone();
-                            let mut cust_lang = store_guard.settings.custom_language.clone();
-                            let mut open_studio = false;
-
-                            self.hud.render_ui(
-                                ui,
-                                &actions,
-                                &groq_config,
-                                &mut sel_lang,
-                                &mut cust_lang,
-                                &spectrum_theme,
-                                &mut || {
-                                    open_studio = true;
-                                },
-                            );
-
-                            if sel_lang != store_guard.settings.selected_language
-                                || cust_lang != store_guard.settings.custom_language
-                            {
-                                store_guard.settings.selected_language = sel_lang;
-                                store_guard.settings.custom_language = cust_lang;
-                                store_guard.save_settings();
-                            }
-
-                            if open_studio {
-                                self.studio_open.store(true, Ordering::Relaxed);
-                                tray::show_studio_window(&ctx);
-                            }
+                    let mut store = store.lock().unwrap();
+                    hud.poll_worker(&ctx, &mut |entry| store.add_history(entry));
+                    let settings = &mut store.settings;
+                    let previous_language = (
+                        settings.selected_language.clone(),
+                        settings.custom_language.clone(),
+                    );
+                    let mut open_studio = false;
+                    theme::configure_egui_theme(&ctx, &spectrum_theme);
+                    ui.painter()
+                        .rect_filled(ui.max_rect(), 0, spectrum_theme.surface);
+                    egui::Frame::new()
+                        .inner_margin(egui::Margin::same(12))
+                        .show(ui, |ui| {
+                            hud.render_ui(ui, settings, &spectrum_theme, &mut || {
+                                open_studio = true
+                            });
                         });
+
+                    if previous_language.0 != settings.selected_language
+                        || previous_language.1 != settings.custom_language
+                    {
+                        store.save_settings();
+                    }
+                    if !hud.is_visible {
+                        hud.close_window(&ctx);
+                    } else {
+                        if !hud.presented {
+                            hud.present(&ctx);
+                        }
+                        let next_height = hud.desired_height(&store.settings);
+                        if (next_height - height).abs() > 0.5 {
+                            ctx.request_repaint_of(ViewportId::ROOT);
+                        }
+                    }
+                    if open_studio {
+                        studio_open.store(true, Ordering::Relaxed);
+                        ctx.request_repaint_of(ViewportId::ROOT);
+                    }
                 },
             );
+            if !self.hud.lock().unwrap().presented {
+                ctx.request_repaint();
+            }
         }
 
-        // 2. Main Studio Dashboard
         let is_studio_open = self.studio_open.load(Ordering::Relaxed);
         if is_studio_open {
-            let wants = true;
-            if self.studio_visible_sent != Some(wants) {
-                ctx.send_viewport_cmd(ViewportCommand::Visible(wants));
-                self.studio_visible_sent = Some(wants);
-            }
             egui::Frame::new()
                 .fill(spectrum_theme.background)
                 .inner_margin(egui::Margin::symmetric(16, 12))
                 .show(ui, |ui| {
-                                    ui.set_min_size(ui.available_size());
+                    ui.set_min_size(ui.available_size());
                     let mut store_guard = self.store.lock().unwrap();
-                    self.studio.hotkey_failed =
-                        self.hotkey_failed.load(std::sync::atomic::Ordering::Relaxed);
+                    self.studio.hotkey_failed = self
+                        .hotkey_failed
+                        .load(std::sync::atomic::Ordering::Relaxed);
                     self.studio.update(ui, &mut store_guard, &spectrum_theme);
                 });
         } else {
@@ -392,15 +455,6 @@ nonsense, which is a very serious problem for publishing.\n";
                     s.save_settings();
                 }
             }
-            let wants = false;
-            if self.studio_visible_sent != Some(wants) {
-                ctx.send_viewport_cmd(ViewportCommand::Visible(wants));
-                self.studio_visible_sent = Some(wants);
-            }
-        }
-
-        if let crate::hud::HudState::Processing { .. } = self.hud.state {
-            ctx.request_repaint_after(std::time::Duration::from_millis(30));
         }
     }
 }

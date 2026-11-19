@@ -2,7 +2,7 @@
 
 use crate::actions::ActionItem;
 use crate::autostart;
-use crate::groq::{available_reasoning_efforts, fetch_chat_models, GroqConfig, GroqModel, DEFAULT_MODEL, FALLBACK_MODELS};
+use crate::groq::{fetch_chat_models, GroqConfig, GroqModel, DEFAULT_MODEL};
 use crate::history::HistoryEntry;
 use crate::stats::calculate_stats;
 use crate::store::{Store, ThemeMode};
@@ -15,7 +15,7 @@ use eframe::egui::{
 
 /// True when Ctrl is held and the given key was pressed this frame.
 fn ctx_key(ui: &Ui, key: Key) -> bool {
-    ui.input(|i| i.modifiers.ctrl && i.key_pressed(key) && !i.modifiers.shift && !i.modifiers.alt)
+    ui.input_mut(|input| input.consume_key(egui::Modifiers::CTRL, key))
 }
 use std::sync::mpsc::{channel, Receiver, Sender};
 
@@ -32,11 +32,9 @@ pub struct Studio {
     pub history_search: String,
     pub history_action_filter: String,
     pub expanded_history_id: Option<String>,
-    pub fetched_models: Vec<GroqModel>,
-    pub is_fetching_models: bool,
-    pub models_status_msg: Option<(String, bool)>,
-    pub models_rx: Option<Receiver<Result<Vec<GroqModel>, String>>>,
-    pub models_tx: Sender<Result<Vec<GroqModel>, String>>,
+    catalog_key: String,
+    catalog_error: Option<String>,
+    models_rx: Option<Receiver<Result<Vec<GroqModel>, String>>>,
     pub show_api_key: bool,
     pub new_action_dialog_open: bool,
     pub new_action_name: String,
@@ -64,18 +62,15 @@ pub struct Studio {
 
 impl Studio {
     pub fn new() -> Self {
-        let (models_tx, models_rx) = channel();
         let (update_tx, update_rx) = channel();
         Self {
             current_tab: StudioTab::History,
             history_search: String::new(),
             history_action_filter: "All".to_string(),
             expanded_history_id: None,
-            fetched_models: Vec::new(),
-            is_fetching_models: false,
-            models_status_msg: None,
-            models_rx: Some(models_rx),
-            models_tx,
+            catalog_key: String::new(),
+            catalog_error: None,
+            models_rx: None,
             show_api_key: false,
             new_action_dialog_open: false,
             new_action_name: String::new(),
@@ -92,67 +87,107 @@ impl Studio {
         }
     }
 
-    /// Spawns a background update check if none is in flight.
-    pub fn check_for_updates(&mut self) {
-        if matches!(
-            self.update_state,
-            Some(UpdateState::Available(_)) | Some(UpdateState::Checking) | Some(UpdateState::Ready(_))
-        ) {
+    pub fn check_for_updates(&mut self, ctx: &egui::Context) {
+        if matches!(self.update_state, Some(UpdateState::Checking | UpdateState::Ready { .. })) {
             return;
         }
         self.update_state = Some(UpdateState::Checking);
         let tx = self.update_tx.clone();
-        std::thread::spawn(move || match updater::check_latest() {
-            Ok(Some(info)) => {
-                let _ = tx.send(UpdateState::Available(info));
-            }
-            Ok(None) => {
-                let _ = tx.send(UpdateState::UpToDate);
-            }
-            Err(e) => {
-                let _ = tx.send(UpdateState::Failed(e));
-            }
-        });
-    }
-
-    /// Downloads the staged update in the background.
-    fn start_update_download(&mut self, info: updater::UpdateInfo) {
-        self.update_state = Some(UpdateState::Checking);
-        let tx = self.update_tx.clone();
+        let ctx = ctx.clone();
         std::thread::spawn(move || {
-            let _ = tx.send(match updater::download(&info) {
-                Ok(staged) => {
-                    let _ = staged;
-                    UpdateState::Ready(info)
-                }
-                Err(e) => {
-                    let _ = std::fs::remove_file(
-                        std::env::current_exe()
-                            .ok()
-                            .and_then(|p| p.parent().map(|d| d.join("Refined.update.tmp")))
-                            .unwrap_or_default(),
-                    );
-                    UpdateState::Failed(e)
-                }
-            });
+            let state = match updater::check_latest() {
+                Ok(Some(info)) => match updater::download(&info) {
+                    Ok(checksum) => UpdateState::Ready { version: info.version, checksum },
+                    Err(error) => UpdateState::Failed(error),
+                },
+                Ok(None) => UpdateState::UpToDate,
+                Err(error) => UpdateState::Failed(error),
+            };
+            if tx.send(state).is_ok() {
+                ctx.request_repaint_of(egui::ViewportId::ROOT);
+            }
         });
     }
 
-    pub fn fetch_models(&mut self, api_key: &str) {
-        if api_key.trim().is_empty() {
-            self.models_status_msg = Some(("Please enter your Groq API key first.".to_string(), false));
+    pub fn sync_updates(&mut self, ctx: &egui::Context) {
+        if let Some(rx) = &self.update_rx {
+            while let Ok(state) = rx.try_recv() {
+                self.update_state = Some(state);
+            }
+        }
+        if self.update_state.is_none() {
+            self.check_for_updates(ctx);
+        }
+    }
+
+    pub fn restart_for_update(&mut self, store: &mut Store) -> bool {
+        if !std::mem::take(&mut self.pending_restart) {
+            return false;
+        }
+        self.flush_pending_now(store);
+        let Some(UpdateState::Ready { checksum, .. }) = &self.update_state else { return false };
+        match updater::apply_staged(checksum) {
+            Ok(()) => true,
+            Err(error) => {
+                self.update_state = Some(UpdateState::Failed(error));
+                false
+            }
+        }
+    }
+
+    fn fetch_models(&mut self, ctx: &egui::Context, key: &str) {
+        if key.is_empty() || self.models_rx.is_some() {
             return;
         }
-
-        self.is_fetching_models = true;
-        self.models_status_msg = Some(("Connecting to Groq API and retrieving chat models...".to_string(), true));
-        let tx = self.models_tx.clone();
-        let key = api_key.to_string();
-
+        self.catalog_key = key.to_owned();
+        self.catalog_error = None;
+        let (tx, rx) = channel();
+        self.models_rx = Some(rx);
+        let ctx = ctx.clone();
+        let key = key.to_owned();
         std::thread::spawn(move || {
-            let res = fetch_chat_models(&key);
-            let _ = tx.send(res);
+            if tx.send(fetch_chat_models(&key)).is_ok() {
+                ctx.request_repaint_of(egui::ViewportId::ROOT);
+            }
         });
+    }
+
+    pub fn sync_models(&mut self, ctx: &egui::Context, config: &mut GroqConfig) {
+        let key = config.api_key.trim();
+        if self.catalog_key != key {
+            config.models = Default::default();
+            self.models_rx = None;
+            self.catalog_error = None;
+            if key.is_empty() {
+                self.catalog_key.clear();
+            } else if let Some(delay) = self.settings_save_at.and_then(|at| {
+                std::time::Duration::from_millis(450).checked_sub(at.elapsed())
+            }) {
+                ctx.request_repaint_after(delay);
+            } else {
+                self.fetch_models(ctx, key);
+            }
+        }
+
+        let Some(rx) = &self.models_rx else { return };
+        match rx.try_recv() {
+            Ok(Ok(models)) => {
+                if models.is_empty() {
+                    self.catalog_error = Some("Groq returned no chat models for this key.".into());
+                }
+                config.models = models.into();
+                self.models_rx = None;
+            }
+            Ok(Err(error)) => {
+                self.catalog_error = Some(error);
+                self.models_rx = None;
+            }
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                self.catalog_error = Some("Model lookup ended unexpectedly.".into());
+                self.models_rx = None;
+            }
+            Err(std::sync::mpsc::TryRecvError::Empty) => {}
+        }
     }
 
     /// Marks settings as edited; the next update flushes them after the
@@ -211,22 +246,8 @@ impl Studio {
                             .color(theme.accent_badge_text),
                     );
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        match self.update_state.clone() {
-                            Some(UpdateState::Available(info)) => {
-                                if spectrum_button(ui, Some(icons::DOWNLOAD), &format!("Get {}", info.version), true, theme)
-                                    .clicked()
-                                {
-                                    self.start_update_download(info);
-                                }
-                            }
-                            Some(UpdateState::Ready(_)) => {
-                                if spectrum_button(ui, Some(icons::REFRESH), "Restart now", true, theme)
-                                    .clicked()
-                                {
-                                    self.pending_restart = true;
-                                }
-                            }
-                            _ => {}
+                        if spectrum_button(ui, Some(icons::REFRESH), "Restart now", true, theme).clicked() {
+                            self.pending_restart = true;
                         }
                     });
                 });
@@ -245,11 +266,8 @@ impl Studio {
                     format!("You are on the latest version ({}).", env!("CARGO_PKG_VERSION")),
                     theme.diff_add_text,
                 ),
-                Some(UpdateState::Available(info)) => {
-                    (format!("Version {} is available.", info.version), theme.text_primary)
-                }
-                Some(UpdateState::Ready(info)) => (
-                    format!("Version {} is downloaded - use the banner to restart.", info.version),
+                Some(UpdateState::Ready { version, .. }) => (
+                    format!("Version {version} is ready to install."),
                     theme.text_primary,
                 ),
                 Some(UpdateState::Failed(e)) => (e.clone(), theme.diff_del_text),
@@ -260,9 +278,9 @@ impl Studio {
                     .color(color),
             );
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                let busy = matches!(self.update_state, Some(UpdateState::Checking));
+                let busy = matches!(self.update_state, Some(UpdateState::Checking | UpdateState::Ready { .. }));
                 if ui.add_enabled(!busy, egui::Button::new(RichText::new("Check again").font(FontId::proportional(12.0)).color(Color32::WHITE)).fill(theme.accent).stroke(Stroke::NONE).corner_radius(CornerRadius::same(4))).clicked() {
-                    self.check_for_updates();
+                    self.check_for_updates(ui.ctx());
                 }
             });
         });
@@ -270,47 +288,6 @@ impl Studio {
 
     pub fn update(&mut self, ui: &mut Ui, store: &mut Store, theme: &SpectrumTheme) {
         self.flush_settings(store);
-
-        // Update-check worker reports back here (several messages may land
-        // at once); the last one wins. The first Studio open kicks the
-        // automatic check off exactly once.
-        if let Some(rx) = &self.update_rx {
-            while let Ok(state) = rx.try_recv() {
-                self.update_state = Some(state);
-            }
-        }
-        if self.update_state.is_none() {
-            self.check_for_updates();
-        }
-
-        // "Restart now": flush pending settings, swap in the staged binary,
-        // and relaunch. Does not return on success.
-        if self.pending_restart {
-            self.pending_restart = false;
-            self.flush_pending_now(store);
-            if let Err(e) = updater::apply_staged() {
-                self.update_state = Some(UpdateState::Failed(e));
-            }
-        }
-
-        if let Some(ref rx) = self.models_rx {
-            if let Ok(res) = rx.try_recv() {
-                self.is_fetching_models = false;
-                match res {
-                    Ok(models) => {
-                        let count = models.len();
-                        self.fetched_models = models;
-                        self.models_status_msg = Some((
-                            format!("Successfully fetched {count} chat models from Groq!"),
-                            true,
-                        ));
-                    }
-                    Err(err) => {
-                        self.models_status_msg = Some((err, false));
-                    }
-                }
-            }
-        }
 
         ui.set_width(ui.available_width());
 
@@ -337,39 +314,12 @@ impl Studio {
             }
         }
 
-        // Authentic Adobe Creative Cloud Top Navigation Bar
         ui.horizontal(|ui| {
-            ui.spacing_mut().item_spacing = Vec2::new(10.0, 0.0);
-
-            // Glowing Adobe 'Rf' squircle mnemonic badge
+            ui.spacing_mut().item_spacing = Vec2::new(8.0, 0.0);
             render_rf_logo(ui, 26.0);
+            ui.label(RichText::new("Refined").size(16.0).strong().color(theme.text_primary));
+            ui.add_space(16.0);
 
-            // Refined Brand
-            ui.label(
-                RichText::new("Refined")
-                    .font(FontId::proportional(16.0))
-                    .color(theme.text_primary)
-                    .strong(),
-            );
-
-            // The header sits on `background`, so the badge needs a fill with
-            // real contrast there: `elevated` is white in light mode and the
-            // pill vanished on the near-white header.
-            let version_bg = if theme.is_dark {
-                theme.surface_elevated
-            } else {
-                theme.surface_subtle
-            };
-            spectrum_badge(
-                ui,
-                &format!("v{}", env!("CARGO_PKG_VERSION")),
-                version_bg,
-                theme.text_secondary,
-            );
-
-            ui.add_space(20.0);
-
-            // Segmented pill navigation tabs
             let tabs = [
                 (StudioTab::History, "History", "Ctrl+1"),
                 (StudioTab::Statistics, "Statistics", "Ctrl+2"),
@@ -378,68 +328,35 @@ impl Studio {
             ];
 
             for (tab, label, shortcut) in tabs {
-                let is_active = self.current_tab == tab;
-                // Custom-drawn pill: egui's stock Button centers the font's
-                // em-box, and Segoe's ink sits 1px low in it, so the text
-                // read as pushed down inside the pill. We center the ink.
-                let galley = ui.painter().layout(
-                    label.to_string(),
-                    FontId::proportional(13.0),
-                    if is_active { theme.text_primary } else { theme.text_secondary },
-                    f32::INFINITY,
-                );
-                let size = Vec2::new(galley.size().x + 24.0, 24.0);
-                let (rect, resp) = ui.allocate_exact_size(size, Sense::click());
-                let hovered = resp.hovered();
-                let bg = if is_active || hovered {
-                    theme.surface_hover
-                } else {
-                    Color32::TRANSPARENT
-                };
-                ui.painter()
-                    .rect_filled(rect, CornerRadius::same(4), bg);
-                ui.painter().galley(
-                    Pos2::new(
-                        rect.left() + 12.0,
-                        rect.center().y - galley.size().y / 2.0 - 1.0,
-                    ),
-                    galley,
-                    Color32::WHITE,
-                );
-                let resp = resp.on_hover_text(shortcut);
-                if resp.clicked() && self.current_tab != tab {
-                    // Leaving an edit-heavy tab should persist edits at once,
-                    // not after the debounce window.
+                let active = self.current_tab == tab;
+                let response = ui.add(
+                    egui::Button::new(RichText::new(label).size(13.0).color(
+                        if active { theme.text_primary } else { theme.text_secondary }
+                    ))
+                    .frame_when_inactive(false)
+                    .min_size(Vec2::new(68.0, 32.0)),
+                ).on_hover_text(shortcut);
+
+                if active {
+                    let bottom = response.rect.bottom() - 1.0;
+                    ui.painter().line_segment(
+                        [Pos2::new(response.rect.left() + 8.0, bottom),
+                         Pos2::new(response.rect.right() - 8.0, bottom)],
+                        Stroke::new(2.0, theme.text_primary),
+                    );
+                }
+                if response.clicked() && !active {
                     self.flush_pending_now(store);
                     self.current_tab = tab;
                 }
             }
         });
-
-        // Balance the nav band: the panel margin puts 12px above the tab
-        // row, so the separator below gets matching tight spacing instead
-        // of a 32px dead zone before the content heading.
-        ui.add_space(6.0);
+        ui.add_space(3.0);
         ui.separator();
-        ui.add_space(6.0);
+        ui.add_space(9.0);
 
-        // Update banner: shown on every tab when a new version is ready or
-        // staged - the one status the user must never miss.
-        match self.update_state.clone() {
-            Some(UpdateState::Available(info)) => {
-                self.render_update_banner(ui, theme, &format!(
-                    "Version {} is available (this is {}).",
-                    info.version,
-                    env!("CARGO_PKG_VERSION")
-                ));
-            }
-            Some(UpdateState::Ready(info)) => {
-                self.render_update_banner(ui, theme, &format!(
-                    "Version {} is downloaded and verified - restart to finish.",
-                    info.version
-                ));
-            }
-            _ => {}
+        if let Some(UpdateState::Ready { version, .. }) = &self.update_state {
+            self.render_update_banner(ui, theme, &format!("Refined {version} is ready to install."));
         }
 
         match self.current_tab {
@@ -526,7 +443,10 @@ impl Studio {
                 );
                 ui.add_space(4.0);
                 ui.label(
-                    RichText::new("Select text in any app, press Alt+V, and pick an action.")
+                    RichText::new(format!(
+                        "Select text, press {}+{}, and pick an action.",
+                        store.settings.hotkey.modifier, store.settings.hotkey.key
+                    ))
                         .font(FontId::proportional(12.0))
                         .color(theme.text_secondary),
                 );
@@ -764,7 +684,7 @@ impl Studio {
                 "total AI operations".to_string(),
             ),
             (
-                "Edit time saved",
+                "Est. editing time saved",
                 format!("{:.1} min", stats.estimated_minutes_saved),
                 "manual rework avoided".to_string(),
             ),
@@ -825,7 +745,7 @@ impl Studio {
                         if stats.total_refinements == 0 {
                             ui.add_space(36.0);
                             ui.label(
-                                RichText::new("Refinements will appear here once you use Alt+V.")
+                                RichText::new("Refinements will appear here after you run an action.")
                                     .font(FontId::proportional(12.0))
                                     .color(theme.text_secondary),
                             );
@@ -1063,41 +983,39 @@ impl Studio {
                             .desired_width(f32::INFINITY),
                     );
 
+                    let name = self.new_action_name.trim();
+                    let id = name.to_lowercase().replace(' ', "_");
+                    let icon = mdl2_codepoint(self.new_action_icon.trim()).and_then(char::from_u32);
+                    let duplicate = store.settings.actions.iter().any(|action| action.id == id);
+                    let prompt = self.new_action_prompt.trim();
+                    let error = if duplicate {
+                        Some("An action with this name already exists.")
+                    } else if icon.is_none() {
+                        Some("Enter a Segoe MDL2 icon code such as E70F.")
+                    } else {
+                        None
+                    };
+                    if let Some(error) = error {
+                        ui.label(RichText::new(error).size(12.0).color(theme.diff_del_text));
+                    }
                     ui.add_space(8.0);
                     ui.horizontal(|ui| {
-                        if spectrum_button(ui, Some(icons::SAVE), "Save Action", true, theme)
-                            .clicked()
-                        {
-                            let name = self.new_action_name.trim().to_string();
-                            // Custom icons must be real Segoe MDL2 codepoints,
-                            // or the palette falls back to tofu/emoji glyphs.
-                            let icon_valid =
-                                mdl2_codepoint(self.new_action_icon.trim()).is_some();
-                            if !name.is_empty() && !icon_valid {
-                                self.models_status_msg = Some((
-                                    "Pick a Segoe MDL2 icon code, e.g. E70F (see the tooltip)."
-                                        .to_string(),
-                                    false,
-                                ));
-                            } else if !name.is_empty() {
-                                let id = name.to_lowercase().replace(' ', "_");
-                                let action = ActionItem {
-                                    id,
-                                    name,
-                                    description: self.new_action_desc.trim().to_string(),
-                                    icon: mdl2_codepoint(self.new_action_icon.trim())
-                                        .map(|cp| char::from_u32(cp).unwrap().to_string())
-                                        .unwrap_or_else(|| self.new_action_icon.trim().to_string()),
-                                    // Positional: assigned by list order.
-                                    shortcut: String::new(),
-                                    prompt_instruction: self.new_action_prompt.trim().to_string(),
-                                    default_instruction: self.new_action_prompt.trim().to_string(),
-                                    is_builtin: false,
-                                    is_rewrite_as: false,
-                                };
-                                store.add_custom_action(action);
-                                self.new_action_dialog_open = false;
-                            }
+                        let save = ui.add_enabled_ui(error.is_none() && !name.is_empty() && !prompt.is_empty(), |ui| {
+                            spectrum_button(ui, Some(icons::SAVE), "Save action", true, theme)
+                        }).inner;
+                        if save.clicked() {
+                            store.add_custom_action(ActionItem {
+                                id,
+                                name: name.into(),
+                                description: self.new_action_desc.trim().into(),
+                                icon: icon.unwrap_or_default().to_string(),
+                                shortcut: String::new(),
+                                prompt_instruction: prompt.into(),
+                                default_instruction: prompt.into(),
+                                is_builtin: false,
+                                is_rewrite_as: false,
+                            });
+                            self.new_action_dialog_open = false;
                         }
 
                         if spectrum_button(ui, Some(icons::CLOSE), "Cancel", false, theme)
@@ -1251,13 +1169,13 @@ impl Studio {
                     .strong(),
             );
             ui.label(
-                RichText::new("Groq access, model behavior, and appearance.")
+                RichText::new("Choose a model for your study notes and customize Refined.")
                     .font(FontId::proportional(12.0))
                     .color(theme.text_secondary),
             );
 
             // The hotkey thread reports register failure here: a GUI app's
-            // stderr is invisible, and a dead Alt+V with no signal is
+            // stderr is invisible, and a dead hotkey with no signal is
             // unfixable from the user's side.
             if self.hotkey_failed {
                 ui.add_space(8.0);
@@ -1267,10 +1185,16 @@ impl Studio {
                             .font(FontId::proportional(14.0))
                             .color(theme.diff_del_text),
                     );
+                    let combo = format!(
+                        "{}+{}",
+                        store.settings.hotkey.modifier, store.settings.hotkey.key
+                    );
                     ui.label(
-                        RichText::new("Alt+V could not be registered - another app may be using it. Refined can still run from the tray.")
-                            .font(FontId::proportional(12.0))
-                            .color(theme.diff_del_text),
+                        RichText::new(format!(
+                            "{combo} could not be registered - another app may be using it. Pick a different shortcut below, or run Refined from the tray."
+                        ))
+                        .font(FontId::proportional(12.0))
+                        .color(theme.diff_del_text),
                     );
                 });
             }
@@ -1289,7 +1213,7 @@ impl Studio {
                             .strong(),
                     );
                     ui.label(
-                        RichText::new("Get your free key from https://console.groq.com/keys")
+                        RichText::new("Paste a Groq API key to load the chat models available to your account.")
                             .font(FontId::proportional(12.0))
                             .color(theme.text_secondary),
                     );
@@ -1297,7 +1221,7 @@ impl Studio {
 
                     ui.horizontal(|ui| {
                         // Fixed width buttons so Show/Hide NEVER jitters container width!
-                        let input_w = (ui.available_width() - 250.0).max(200.0);
+                        let input_w = (ui.available_width() - 214.0).max(200.0);
                         let edit = if self.show_api_key {
                             ui.add_sized([input_w, 28.0], egui::TextEdit::singleline(&mut store.settings.groq.api_key).align(Align2::LEFT_CENTER))
                         } else {
@@ -1357,153 +1281,149 @@ impl Studio {
                             self.show_api_key = !self.show_api_key;
                         }
 
-                        // Fixed 170px width for Fetch Models button
-                        if ui.add_sized([170.0, 28.0], egui::Button::new(RichText::new(format!("{}  Fetch Models from Groq", icons::DOWNLOAD)).font(FontId::proportional(12.0)).color(Color32::WHITE).strong()).fill(theme.accent).stroke(Stroke::NONE).corner_radius(CornerRadius::same(4))).clicked() {
-                            let key = store.settings.groq.api_key.clone();
-                            self.fetch_models(&key);
-                        }
+                        ui.add_enabled_ui(
+                            self.models_rx.is_none() && !store.settings.groq.api_key.trim().is_empty(),
+                            |ui| {
+                                if spectrum_button_compact(ui, Some(icons::REFRESH), "Refresh models", false, theme).clicked() {
+                                    self.fetch_models(ui.ctx(), store.settings.groq.api_key.trim());
+                                }
+                            },
+                        );
                     });
 
-                    if let Some((ref msg, ok)) = self.models_status_msg {
-                        ui.add_space(6.0);
-                        let color = if ok { theme.diff_add_text } else { theme.diff_del_text };
-                        ui.label(RichText::new(msg).font(FontId::proportional(12.0)).color(color));
+                    ui.add_space(6.0);
+                    if let Some(error) = &self.catalog_error {
+                        ui.label(RichText::new(error).size(12.0).color(theme.diff_del_text));
+                    } else {
+                        let status = if self.models_rx.is_some() {
+                            "Checking Groq for available models".to_owned()
+                        } else if store.settings.groq.models.is_empty() {
+                            "Enter your API key to load models.".to_owned()
+                        } else {
+                            format!("{} chat models available", store.settings.groq.models.len())
+                        };
+                        ui.label(RichText::new(status).size(12.0).color(theme.text_secondary));
                     }
                 });
 
             ui.add_space(14.0);
 
-            // Model & Reasoning Settings Card
-            card_frame(theme, egui::Margin::same(16))
-                .show(ui, |ui| {
-                    ui.set_width(ui.available_width());
-
-                    ui.label(
-                        RichText::new("AI Model & Inference Configuration")
-                            .font(FontId::proportional(14.0))
-                            .color(theme.text_primary)
-                            .strong(),
-                    );
-                    ui.add_space(10.0);
-
-                    // Model selection
-                    ui.horizontal(|ui| {
-                        ui.label(RichText::new("Active Model:").font(FontId::proportional(12.0)).color(theme.text_primary));
-                        let current_model = store.settings.groq.model.clone();
-                        let mut model_picked = false;
-
-                        egui::ComboBox::from_id_salt("groq_model_selector")
-                            .selected_text(&current_model)
-                            .width(260.0)
-                            .show_ui(ui, |ui| {
-                                if !self.fetched_models.is_empty() {
-                                    for m in &self.fetched_models {
-                                        let label = if m.id == DEFAULT_MODEL {
-                                            format!("{} (Recommended)", m.id)
-                                        } else {
-                                            m.id.clone()
-                                        };
-                                        if ui.selectable_value(&mut store.settings.groq.model, m.id.clone(), label).clicked() {
-                                            model_picked = true;
-                                        }
-                                    }
-                                } else {
-                                    // Shown only until the user fetches the
-                                    // live list; mirrors Groq's current chat
-                                    // lineup and deliberately excludes
-                                    // non-chat models (Whisper, Orpheus,
-                                    // prompt guards, safeguard classifier).
-                                    for m in FALLBACK_MODELS {
-                                        let label = if *m == DEFAULT_MODEL {
-                                            format!("{m} (Recommended)")
-                                        } else {
-                                            (*m).to_string()
-                                        };
-                                        if ui.selectable_value(&mut store.settings.groq.model, m.to_string(), label).clicked() {
-                                            model_picked = true;
-                                        }
-                                    }
+            card_frame(theme, egui::Margin::same(16)).show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                let config = &mut store.settings.groq;
+                let models = config.models.clone();
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new("Model behavior").size(15.0).strong());
+                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        for (label, model, detail) in [
+                            ("Study preset", "openai/gpt-oss-120b", "GPT-OSS 120B with low reasoning. Best balanced result in the study benchmark."),
+                            ("Quick edits", DEFAULT_MODEL, "GPT-OSS 20B with low reasoning. A faster option for short edits."),
+                        ] {
+                            ui.add_enabled_ui(models.iter().any(|entry| entry.id == model), |ui| {
+                                if spectrum_button_compact(ui, None, label, false, theme).on_hover_text(detail).clicked() {
+                                    config.model = model.into();
+                                    config.reasoning_effort = "low".into();
+                                    self.mark_settings_dirty();
                                 }
                             });
-                        if model_picked {
-                            self.mark_settings_dirty();
                         }
                     });
-
-                    ui.add_space(8.0);
-
-                    // Reasoning effort
-                    ui.horizontal(|ui| {
-                        ui.label(RichText::new("Reasoning Effort:").font(FontId::proportional(12.0)).color(theme.text_primary));
-                        let current_effort = store.settings.groq.reasoning_effort.clone();
-                        let mut effort_picked = false;
-
-                        egui::ComboBox::from_id_salt("groq_reasoning_effort")
-                            .selected_text(&current_effort)
-                            .width(140.0)
-                            .show_ui(ui, |ui| {
-                                for effort in available_reasoning_efforts() {
-                                    if ui.selectable_value(&mut store.settings.groq.reasoning_effort, effort.to_string(), effort).clicked() {
-                                        effort_picked = true;
-                                    }
-                                }
-                            });
-                        if effort_picked {
-                            self.mark_settings_dirty();
-                        }
-
-                        ui.add_space(10.0);
-                        ui.label(
-                            RichText::new("(Default: high; automatically falls back if model does not support reasoning)")
-                                .font(FontId::proportional(12.0))
-                                .color(theme.text_secondary),
-                        );
-                    });
-
-                    ui.add_space(12.0);
-
-                    // Sliders on a shared label column so they align at the
-                    // same x; the value is shown next to each slider.
-                    egui::Grid::new("groq_numeric_settings")
-                        .num_columns(3)
-                        .spacing([12.0, 8.0])
-                        .show(ui, |ui| {
-                            ui.label(RichText::new("Temperature:").font(FontId::proportional(12.0)).color(theme.text_primary));
-                            let slider = spectrum_slider(ui, &mut store.settings.groq.temperature, 0.0..=2.0, 0.05, theme);
-                            if slider.changed() {
-                                self.mark_settings_dirty();
-                            }
-                            ui.label(
-                                RichText::new(format!("{:.2}", store.settings.groq.temperature))
-                                    .font(FontId::proportional(12.0))
-                                    .color(theme.text_secondary),
-                            );
-                            ui.end_row();
-
-                            ui.label(RichText::new("Top-P:").font(FontId::proportional(12.0)).color(theme.text_primary));
-                            let slider = spectrum_slider(ui, &mut store.settings.groq.top_p, 0.0..=1.0, 0.05, theme);
-                            if slider.changed() {
-                                self.mark_settings_dirty();
-                            }
-                            ui.label(
-                                RichText::new(format!("{:.2}", store.settings.groq.top_p))
-                                    .font(FontId::proportional(12.0))
-                                    .color(theme.text_secondary),
-                            );
-                            ui.end_row();
-                        });
-
-                    ui.add_space(8.0);
-
-                    // Max Tokens (aligned to 32,768)
-                    ui.label(
-                        RichText::new(
-                            "Max completion tokens: 32,768 (the optimal context limit)",
-                        )
-                        .font(FontId::proportional(12.0))
-                        .color(theme.text_secondary),
-                    );
                 });
+                ui.add_space(10.0);
+
+                egui::Grid::new("groq_model_settings").num_columns(2).spacing([16.0, 8.0]).show(ui, |ui| {
+                    ui.label("Model");
+                    let model_label = config.selected_model().map_or(config.model.as_str(), GroqModel::label);
+                    let mut picked = None;
+                    ui.add_enabled_ui(!models.is_empty(), |ui| {
+                        egui::ComboBox::from_id_salt("groq_model_select").selected_text(model_label)
+                            .width(240.0).show_ui(ui, |ui| {
+                                for model in models.iter() {
+                                    if ui.selectable_label(config.model == model.id, model.label())
+                                        .on_hover_text(&model.id).clicked()
+                                    {
+                                        picked = Some(model.id.clone());
+                                    }
+                                }
+                            });
+                    });
+                    if let Some(model) = picked {
+                        config.model = model;
+                        self.mark_settings_dirty();
+                    }
+                    ui.end_row();
+
+                    ui.label("Reasoning");
+                    let options = config.reasoning_options();
+                    let active = options.contains(&config.reasoning_effort.as_str());
+                    if options.is_empty() {
+                        ui.label(RichText::new("Managed by model").color(theme.text_secondary));
+                    } else {
+                        let effort_label = |effort: &str| match effort {
+                            "none" => "Off", "default" => "Model default", "low" => "Low",
+                            "medium" => "Medium", "high" => "High", "xhigh" => "Extra high",
+                            "minimal" => "Minimal", "max" => "Maximum", _ => "Custom",
+                        };
+                        let mut picked = None;
+                        egui::ComboBox::from_id_salt("groq_reasoning_effort")
+                            .selected_text(if active { effort_label(&config.reasoning_effort) } else { "Model default" })
+                            .width(240.0).show_ui(ui, |ui| {
+                                for effort in options {
+                                    if ui.selectable_label(effort == config.reasoning_effort, effort_label(effort)).clicked() {
+                                        picked = Some(effort.to_owned());
+                                    }
+                                }
+                            });
+                        if let Some(effort) = picked {
+                            config.reasoning_effort = effort;
+                            self.mark_settings_dirty();
+                        }
+                    }
+                    ui.end_row();
+
+                    ui.label("Output limit");
+                    let limit = config.selected_model().and_then(GroqModel::completion_limit);
+                    ui.horizontal(|ui| {
+                        let mut auto = config.max_completion_tokens == 0;
+                        let auto_label = limit.map_or("Model maximum".into(), |value| format!("Model maximum ({} tokens)", fmt_thousands(value as usize)));
+                        if ui.checkbox(&mut auto, auto_label).changed() {
+                            config.max_completion_tokens = if auto { 0 } else { limit.unwrap_or(4096).min(4096) };
+                            config.output_limit_edited = true;
+                            self.mark_settings_dirty();
+                        }
+                        if !auto {
+                            let mut cap = config.request_cap().unwrap_or(4096);
+                            if ui.add(egui::DragValue::new(&mut cap).range(1..=limit.unwrap_or(131_072u32)).suffix(" tokens")).changed() {
+                                config.max_completion_tokens = cap;
+                                config.output_limit_edited = true;
+                                self.mark_settings_dirty();
+                            }
+                        }
+                    });
+                    ui.end_row();
+                });
+
+                if !models.is_empty() && config.selected_model().is_none() {
+                    ui.label(RichText::new("Your saved model is unavailable. Choose one from the list.")
+                        .size(12.0).color(theme.diff_del_text));
+                }
+                ui.add_space(8.0);
+                ui.collapsing("Sampling settings", |ui| {
+                    egui::Grid::new("groq_numeric_settings").num_columns(3).spacing([12.0, 8.0]).show(ui, |ui| {
+                        for (label, value, max) in [
+                            ("Temperature", &mut config.temperature, 2.0),
+                            ("Top P", &mut config.top_p, 1.0),
+                        ] {
+                            ui.label(label);
+                            if spectrum_slider(ui, value, 0.0..=max, 0.05, theme).changed() {
+                                self.mark_settings_dirty();
+                            }
+                            ui.label(RichText::new(format!("{value:.2}")).color(theme.text_secondary));
+                            ui.end_row();
+                        }
+                    });
+                });
+            });
 
             ui.add_space(14.0);
 
@@ -1646,9 +1566,61 @@ impl Studio {
                         ui.label(RichText::new("Start Refined automatically with Windows").color(theme.text_primary));
                     });
 
-                    ui.add_space(8.0);
+                    ui.add_space(10.0);
+
+                    // Global shortcut picker. Changes apply instantly: the
+                    // hotkey thread re-registers when it sees the new combo.
                     ui.label(
-                        RichText::new("Global Shortcut: Alt + V (triggers only when text is actively selected).")
+                        RichText::new("Global Shortcut")
+                            .font(FontId::proportional(13.0))
+                            .color(theme.text_primary)
+                            .strong(),
+                    );
+                    ui.horizontal(|ui| {
+                        let cur_mod = store.settings.hotkey.modifier.clone();
+                        let cur_key = store.settings.hotkey.key.clone();
+
+                        egui::ComboBox::from_id_salt("hotkey_modifier")
+                            .selected_text(cur_mod.clone())
+                            .width(110.0)
+                            .show_ui(ui, |ui| {
+                                let mut sel: Option<&'static str> = None;
+                                for m in crate::store::HOTKEY_MODIFIERS {
+                                    ui.selectable_value(&mut sel, Some(*m), *m);
+                                }
+                                if let Some(m) = sel {
+                                    if m != cur_mod {
+                                        store.settings.hotkey.modifier = m.to_string();
+                                        self.mark_settings_dirty();
+                                    }
+                                }
+                            });
+
+                        ui.label(
+                            RichText::new("+")
+                                .color(theme.text_secondary)
+                                .strong(),
+                        );
+
+                        egui::ComboBox::from_id_salt("hotkey_key")
+                            .selected_text(cur_key.clone())
+                            .width(90.0)
+                            .show_ui(ui, |ui| {
+                                let mut sel: Option<&'static str> = None;
+                                for k in crate::store::HOTKEY_KEY_CHOICES {
+                                    ui.selectable_value(&mut sel, Some(*k), *k);
+                                }
+                                if let Some(k) = sel {
+                                    if k != cur_key {
+                                        store.settings.hotkey.key = k.to_string();
+                                        self.mark_settings_dirty();
+                                    }
+                                }
+                            });
+                    });
+                    ui.add_space(4.0);
+                    ui.label(
+                        RichText::new("Triggers only when text is actively selected. Applies instantly; no restart needed.")
                             .font(FontId::proportional(12.0))
                             .color(theme.text_secondary),
                     );

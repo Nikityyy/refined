@@ -7,13 +7,15 @@ use std::thread::sleep;
 use std::time::Duration;
 use windows::Win32::Foundation::{GlobalFree, HANDLE, HGLOBAL, HWND};
 use windows::Win32::System::DataExchange::{
-    CloseClipboard, EmptyClipboard, GetClipboardData, GetClipboardSequenceNumber, IsClipboardFormatAvailable,
-    OpenClipboard, SetClipboardData,
+    CloseClipboard, EmptyClipboard, GetClipboardData, GetClipboardSequenceNumber,
+    IsClipboardFormatAvailable, OpenClipboard, SetClipboardData,
 };
-use windows::Win32::System::Memory::{GlobalAlloc, GlobalLock, GlobalSize, GlobalUnlock, GMEM_MOVEABLE};
+use windows::Win32::System::Memory::{
+    GlobalAlloc, GlobalLock, GlobalSize, GlobalUnlock, GMEM_MOVEABLE,
+};
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    GetAsyncKeyState, SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYBD_EVENT_FLAGS, KEYEVENTF_KEYUP,
-    VIRTUAL_KEY, VK_C, VK_CONTROL, VK_MENU, VK_V,
+    GetAsyncKeyState, SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYBD_EVENT_FLAGS,
+    KEYEVENTF_KEYUP, VIRTUAL_KEY, VK_C, VK_CONTROL, VK_MENU, VK_SHIFT, VK_V, VK_Z,
 };
 use windows::Win32::UI::WindowsAndMessaging::{GetForegroundWindow, SetForegroundWindow};
 
@@ -108,7 +110,11 @@ pub fn set_clipboard_text(text: &str) -> bool {
 }
 
 fn key_event(vk: VIRTUAL_KEY, up: bool) -> INPUT {
-    let flags = if up { KEYEVENTF_KEYUP } else { KEYBD_EVENT_FLAGS(0) };
+    let flags = if up {
+        KEYEVENTF_KEYUP
+    } else {
+        KEYBD_EVENT_FLAGS(0)
+    };
     INPUT {
         r#type: INPUT_KEYBOARD,
         Anonymous: INPUT_0 {
@@ -123,38 +129,21 @@ fn key_event(vk: VIRTUAL_KEY, up: bool) -> INPUT {
     }
 }
 
-/// Releases physical Alt key if held, then sends Ctrl+C.
-pub fn send_copy_with_alt_release() {
-    unsafe {
-        // If Alt is physically held down from Alt+V, synthesize Alt KeyUp first
-        // so target application sees pure Ctrl+C rather than Ctrl+Alt+C
-        if (GetAsyncKeyState(VK_MENU.0 as i32) as u16 & 0x8000) != 0 {
-            let alt_up = [key_event(VK_MENU, true)];
-            SendInput(&alt_up, std::mem::size_of::<INPUT>() as i32);
-            sleep(Duration::from_millis(20));
-        }
-
-        let inputs = [
-            key_event(VK_CONTROL, false),
-            key_event(VK_C, false),
-            key_event(VK_C, true),
-            key_event(VK_CONTROL, true),
-        ];
-        SendInput(&inputs, std::mem::size_of::<INPUT>() as i32);
+fn send_control_key(key: VIRTUAL_KEY, release_modifiers: bool) -> bool {
+    let mut inputs = Vec::with_capacity(6);
+    if release_modifiers {
+        inputs.extend([VK_MENU, VK_SHIFT].into_iter().filter_map(|modifier| {
+            (unsafe { GetAsyncKeyState(i32::from(modifier.0)) } < 0)
+                .then(|| key_event(modifier, true))
+        }));
     }
-}
-
-/// Sends Ctrl+V into the active window.
-pub fn send_paste() {
-    let inputs = [
+    inputs.extend([
         key_event(VK_CONTROL, false),
-        key_event(VK_V, false),
-        key_event(VK_V, true),
+        key_event(key, false),
+        key_event(key, true),
         key_event(VK_CONTROL, true),
-    ];
-    unsafe {
-        SendInput(&inputs, std::mem::size_of::<INPUT>() as i32);
-    }
+    ]);
+    unsafe { SendInput(&inputs, std::mem::size_of::<INPUT>() as i32) == inputs.len() as u32 }
 }
 
 /// Captures selected text and target window handle.
@@ -168,7 +157,7 @@ pub fn capture_selection_with_window() -> Option<CapturedSelection> {
 
     let old_seq = unsafe { GetClipboardSequenceNumber() };
 
-    send_copy_with_alt_release();
+    send_control_key(VK_C, true);
 
     // Poll for the clipboard sequence change. Heavy applications (big
     // Word documents, some terminals) take longer than one fast poll
@@ -184,8 +173,8 @@ pub fn capture_selection_with_window() -> Option<CapturedSelection> {
         }
         sleep(Duration::from_millis(8));
     }
-    if !changed {
-        send_copy_with_alt_release();
+    if !changed && unsafe { GetForegroundWindow() } == target_hwnd {
+        send_control_key(VK_C, true);
         // A fresh window: slow responders (heavy Word documents, some
         // terminals) need their own budget, not the tail of round one.
         let second = std::time::Instant::now();
@@ -199,14 +188,11 @@ pub fn capture_selection_with_window() -> Option<CapturedSelection> {
         }
     }
 
-    if changed {
+    if changed && unsafe { GetForegroundWindow() } == target_hwnd {
         if let Some(text) = get_clipboard_text() {
             let trimmed = text.trim();
             if !trimmed.is_empty() {
-                return Some(CapturedSelection {
-                    text,
-                    target_hwnd,
-                });
+                return Some(CapturedSelection { text, target_hwnd });
             }
         }
     }
@@ -218,36 +204,37 @@ pub fn capture_selection_with_window() -> Option<CapturedSelection> {
 /// Replaces text in target window: restores target window focus, normalizes CRLF,
 /// pastes via Ctrl+V.
 pub fn replace_selection_in_target(target_hwnd: HWND, new_text: &str) -> bool {
-    // No known target window (e.g. demo mode): never send a paste into
-    // whatever happens to be in the foreground.
+    if !focus_target(target_hwnd) {
+        return false;
+    }
+    let normalized = new_text.replace("\r\n", "\n").replace('\n', "\r\n");
+    set_clipboard_text(&normalized)
+        && unsafe { GetForegroundWindow() } == target_hwnd
+        && send_control_key(VK_V, false)
+}
+
+pub fn undo_in_target(target_hwnd: HWND) -> bool {
+    focus_target(target_hwnd) && send_control_key(VK_Z, false)
+}
+
+fn focus_target(target_hwnd: HWND) -> bool {
     if target_hwnd.0.is_null() {
         return false;
     }
-
-    // Normalize newlines to standard Windows CRLF for consistent paragraph pasting
-    let normalized = new_text.replace("\r\n", "\n").replace('\n', "\r\n");
-
-    if !set_clipboard_text(&normalized) {
-        return false;
-    }
-
-    // Restore target window to foreground so Ctrl+V lands in the user's app
     unsafe {
-        if !target_hwnd.0.is_null() {
-            let _ = SetForegroundWindow(target_hwnd);
+        if GetForegroundWindow() == target_hwnd {
+            return true;
         }
-    }
-
-    // Wait briefly for target window to regain active foreground focus
-    let start = std::time::Instant::now();
-    while start.elapsed() < Duration::from_millis(180) {
-        if unsafe { GetForegroundWindow() } == target_hwnd {
-            break;
+        if !SetForegroundWindow(target_hwnd).as_bool() {
+            return false;
         }
-        sleep(Duration::from_millis(10));
+        let deadline = std::time::Instant::now() + Duration::from_millis(80);
+        while GetForegroundWindow() != target_hwnd {
+            if std::time::Instant::now() >= deadline {
+                return false;
+            }
+            sleep(Duration::from_millis(4));
+        }
+        true
     }
-
-    sleep(Duration::from_millis(25));
-    send_paste();
-    true
 }

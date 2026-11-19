@@ -13,12 +13,15 @@ use crate::groq::http_agent;
 use serde::Deserialize;
 use std::io::Read;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 
 const RELEASES_LATEST: &str = "https://api.github.com/repos/Nikityyy/refined/releases/latest";
 /// The portable binary asset each release publishes.
 const ASSET_NAME: &str = "Refined.exe";
 const ASSET_HASH_NAME: &str = "Refined.exe.sha256";
 
+const MAX_EXE_BYTES: u64 = 64 * 1024 * 1024;
+const RESTART_ARG: &str = "--update-restart";
 const CURRENT_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 #[derive(Debug, Clone)]
@@ -27,7 +30,7 @@ pub struct UpdateInfo {
     /// Download URL of the `Refined.exe` asset.
     pub url: String,
     pub size: u64,
-    pub sha_url: Option<String>,
+    pub sha_url: String,
 }
 
 #[derive(Debug, Clone)]
@@ -35,9 +38,11 @@ pub enum UpdateState {
     /// A check or download is in flight (worker thread owns the work).
     Checking,
     UpToDate,
-    Available(UpdateInfo),
     /// Staged and verified; waiting for the user to restart.
-    Ready(UpdateInfo),
+    Ready {
+        version: String,
+        checksum: String,
+    },
     Failed(String),
 }
 
@@ -55,17 +60,25 @@ struct GithubAsset {
 }
 
 pub fn version_pair(v: &str) -> Option<(u64, u64, u64)> {
-    let mut it = v.trim().trim_start_matches('v').split('.');
-    let a = it.next()?.parse().ok()?;
-    let b = it.next().unwrap_or("0").parse().unwrap_or(0);
-    let c = it.next().unwrap_or("0").parse().unwrap_or(0);
-    Some((a, b, c))
+    let mut parts = v.trim().strip_prefix('v').unwrap_or(v.trim()).split('.');
+    let version = (
+        parts.next()?.parse().ok()?,
+        parts.next()?.parse().ok()?,
+        parts.next()?.parse().ok()?,
+    );
+    parts.next().is_none().then_some(version)
 }
 
 /// Asks GitHub for the latest release. Ok(None) = already up to date.
 pub fn check_latest() -> Result<Option<UpdateInfo>, String> {
+    #[cfg(feature = "demo")]
+    let demo_url = std::env::var("REFINED_DEMO_RELEASES").ok();
+    #[cfg(feature = "demo")]
+    let release_url = demo_url.as_deref().unwrap_or(RELEASES_LATEST);
+    #[cfg(not(feature = "demo"))]
+    let release_url = RELEASES_LATEST;
     let resp: GithubRelease = http_agent()
-        .get(RELEASES_LATEST)
+        .get(release_url)
         .header("User-Agent", "Refined-Updater")
         .header("Accept", "application/vnd.github+json")
         .call()
@@ -94,72 +107,73 @@ pub fn check_latest() -> Result<Option<UpdateInfo>, String> {
             .assets
             .iter()
             .find(|a| a.name.eq_ignore_ascii_case(ASSET_HASH_NAME))
-            .map(|a| a.browser_download_url.clone()),
+            .map(|a| a.browser_download_url.clone())
+            .ok_or("This release is missing its checksum.")?,
     }))
 }
 
-/// Downloads the new binary to `Refined.update.tmp` next to the running exe
-/// and verifies it against the release's SHA-256 checksum file.
-/// Returns the staged path. Only ever called from a worker thread.
-pub fn download(info: &UpdateInfo) -> Result<PathBuf, String> {
-    let exe = std::env::current_exe().map_err(|e| format!("Cannot locate our exe: {e}"))?;
-    let dir = exe
-        .parent()
-        .ok_or("Our exe has no directory?")?
-        .to_path_buf();
-    let tmp = dir.join("Refined.update.tmp");
+/// Downloads to a fixed sibling path only after checking size and checksum.
+pub fn download(info: &UpdateInfo) -> Result<String, String> {
+    if !(1..=MAX_EXE_BYTES).contains(&info.size) {
+        return Err("Unexpected update download size.".into());
+    }
+    let paths = update_paths()?;
+    let expected_response = http_agent()
+        .get(&info.sha_url)
+        .header("User-Agent", "Refined-Updater")
+        .call()
+        .map_err(|e| format!("Checksum download failed: {e}"))?;
+    let mut expected_bytes = Vec::new();
+    expected_response
+        .into_body()
+        .into_reader()
+        .take(1024)
+        .read_to_end(&mut expected_bytes)
+        .map_err(|e| format!("Checksum unreadable: {e}"))?;
+    let checksum = String::from_utf8_lossy(&expected_bytes)
+        .split_whitespace()
+        .next()
+        .filter(|hash| hash.len() == 64 && hash.bytes().all(|byte| byte.is_ascii_hexdigit()))
+        .ok_or("The release checksum is invalid.")?
+        .to_ascii_lowercase();
 
-    let resp = http_agent()
+    let response = http_agent()
         .get(&info.url)
         .header("User-Agent", "Refined-Updater")
         .call()
-        .map_err(|e| format!("Download failed: {e}"))?;
-    let mut reader = resp.into_body().into_reader();
-
-    let mut buf = Vec::with_capacity(info.size.min(64 * 1024 * 1024) as usize);
-    loop {
-        let mut chunk = [0u8; 64 * 1024];
-        let n = reader
-            .read(&mut chunk)
-            .map_err(|e| format!("Download failed: {e}"))?;
-        if n == 0 {
-            break;
-        }
-        buf.extend_from_slice(&chunk[..n]);
-        if info.size > 0 && buf.len() as u64 > info.size {
-            return Err("Downloaded file is larger than expected - aborted.".into());
-        }
+        .map_err(|e| format!("Update download failed: {e}"))?;
+    let mut binary = Vec::with_capacity(info.size as usize);
+    response
+        .into_body()
+        .into_reader()
+        .take(info.size + 1)
+        .read_to_end(&mut binary)
+        .map_err(|e| format!("Update download failed: {e}"))?;
+    if binary.len() as u64 != info.size || !matches_checksum(&binary, &checksum) {
+        return Err("The update failed its integrity check. Try downloading it again.".into());
     }
+    std::fs::write(paths.staged, binary).map_err(|e| format!("Could not stage the update: {e}"))?;
+    Ok(checksum)
+}
 
-    // SHA-256 against the release checksum asset; a mismatch means a
-    // corrupted or tampered download and is never applied.
-    if let Some(sha_url) = &info.sha_url {
-        let expected_body = http_agent()
-            .get(sha_url)
-            .header("User-Agent", "Refined-Updater")
-            .call()
-            .map_err(|e| format!("Checksum download failed: {e}"))?
-            .into_body()
-            .into_reader()
-            .take(64 * 1024)
-            .bytes()
-            .collect::<Result<Vec<u8>, _>>()
-            .map_err(|e| format!("Checksum unreadable: {e}"))?;
-        let expected = String::from_utf8_lossy(&expected_body)
-            .split_whitespace()
-            .next()
-            .unwrap_or("")
-            .to_ascii_lowercase();
-        let hex = sha256_hex(&buf);
-        if expected.is_empty() || !hex.eq_ignore_ascii_case(&expected) {
-            return Err("Download failed its integrity check - nothing was changed.".into());
-        }
-    } else {
-        return Err("Release is missing its checksum file - refusing to update.".into());
-    }
+fn matches_checksum(bytes: &[u8], expected: &str) -> bool {
+    bytes.starts_with(b"MZ") && sha256_hex(bytes).eq_ignore_ascii_case(expected)
+}
 
-    std::fs::write(&tmp, &buf).map_err(|e| format!("Could not write the update file: {e}"))?;
-    Ok(tmp)
+struct UpdatePaths {
+    exe: PathBuf,
+    backup: PathBuf,
+    staged: PathBuf,
+}
+
+fn update_paths() -> Result<UpdatePaths, String> {
+    let exe = std::env::current_exe().map_err(|e| format!("Cannot locate Refined: {e}"))?;
+    let dir = exe.parent().unwrap_or(Path::new("."));
+    Ok(UpdatePaths {
+        backup: exe.with_extension("old.exe"),
+        staged: dir.join("Refined.update.tmp"),
+        exe,
+    })
 }
 
 fn sha256_hex(bytes: &[u8]) -> String {
@@ -169,46 +183,90 @@ fn sha256_hex(bytes: &[u8]) -> String {
     h.finalize().iter().map(|b| format!("{b:02x}")).collect()
 }
 
-/// Swap the staged `Refined.update.tmp` in and restart into it. The staged
-/// path is derived from the running exe, exactly where `download` put it.
-/// Swapping the exact exe path keeps the Start-menu, desktop and autostart
-/// shortcuts and the uninstaller entry valid without running any installer.
-/// This function does not return on success.
-pub fn apply_staged() -> Result<(), String> {
-    let exe = std::env::current_exe().map_err(|e| format!("Cannot locate our exe: {e}"))?;
-    let staged = match exe.parent() {
-        Some(dir) => dir.join("Refined.update.tmp"),
-        None => return Err("Our exe has no directory?".to_string()),
-    };
-    let old = exe.with_extension("old.exe");
-
-    let _ = std::fs::remove_file(&old);
-    std::fs::rename(&exe, &old).map_err(|e| {
-        format!("Could not set the update aside: {e}. Try running Refined from a writable folder.")
-    })?;
-    if let Err(e) = std::fs::rename(&staged, &exe) {
-        // Put the current version back so the app starts next time.
-        let _ = std::fs::rename(&old, &exe);
-        return Err(format!("Could not place the new version: {e}"));
+/// Rechecks the staged download, then starts a new process that waits for
+/// the current instance to finish shutting down before opening Studio.
+pub fn apply_staged(checksum: &str) -> Result<(), String> {
+    let paths = update_paths()?;
+    let mut binary = Vec::new();
+    std::fs::File::open(&paths.staged)
+        .and_then(|file| file.take(MAX_EXE_BYTES + 1).read_to_end(&mut binary))
+        .map_err(|e| format!("Could not read the staged update: {e}"))?;
+    if binary.len() as u64 > MAX_EXE_BYTES || !matches_checksum(&binary, checksum) {
+        return Err("The staged update failed its integrity check. Download it again.".into());
     }
 
-    let _ = std::process::Command::new(&exe).spawn();
-    std::process::exit(0);
+    let _ = std::fs::remove_file(&paths.backup);
+    std::fs::rename(&paths.exe, &paths.backup)
+        .map_err(|e| format!("Could not move the running app aside: {e}"))?;
+    if let Err(error) = std::fs::rename(&paths.staged, &paths.exe) {
+        return Err(restore_backup(
+            &paths,
+            format!("Could not install the update: {error}"),
+        ));
+    }
+    if let Err(error) = Command::new(&paths.exe)
+        .args([RESTART_ARG, &std::process::id().to_string()])
+        .spawn()
+    {
+        let _ = std::fs::rename(&paths.exe, &paths.staged);
+        return Err(restore_backup(
+            &paths,
+            format!("Could not restart Refined: {error}"),
+        ));
+    }
+    Ok(())
 }
 
-/// Removes the previous version's leftovers next to the running exe.
-/// The old binary cannot be deleted while it is what we are running.
+fn restore_backup(paths: &UpdatePaths, reason: String) -> String {
+    match std::fs::rename(&paths.backup, &paths.exe) {
+        Ok(()) => reason,
+        Err(error) => format!("{reason}. Could not restore the previous program: {error}"),
+    }
+}
+
+pub fn wait_for_previous_process() -> bool {
+    use windows::Win32::Foundation::{CloseHandle, WAIT_OBJECT_0};
+    use windows::Win32::System::Threading::{
+        OpenProcess, WaitForSingleObject, PROCESS_SYNCHRONIZE,
+    };
+
+    let mut args = std::env::args();
+    let Some(pid) = args
+        .find(|arg| arg == RESTART_ARG)
+        .and_then(|_| args.next())
+        .and_then(|arg| arg.parse().ok())
+    else {
+        return true;
+    };
+    let Ok(previous) = (unsafe { OpenProcess(PROCESS_SYNCHRONIZE, false, pid) }) else {
+        return true;
+    };
+    unsafe {
+        let stopped = WaitForSingleObject(previous, 10_000) == WAIT_OBJECT_0;
+        let _ = CloseHandle(previous);
+        stopped
+    }
+}
+
 pub fn cleanup_after_update() {
-    if let Ok(exe) = std::env::current_exe() {
-        let dir = exe.parent().unwrap_or(Path::new("."));
-        let _ = std::fs::remove_file(dir.join("Refined.old.exe"));
-        let _ = std::fs::remove_file(dir.join("Refined.update.tmp"));
+    if let Ok(paths) = update_paths() {
+        let _ = std::fs::remove_file(paths.backup);
+        let _ = std::fs::remove_file(paths.staged);
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::version_pair;
+    use super::{matches_checksum, sha256_hex, version_pair};
+
+    #[test]
+    fn altered_update_is_rejected() {
+        let original = b"MZ verified executable";
+        let checksum = sha256_hex(original);
+        assert!(matches_checksum(original, &checksum));
+        assert!(!matches_checksum(b"MZ altered executable", &checksum));
+        assert!(!matches_checksum(b"plain text", &sha256_hex(b"plain text")));
+    }
 
     #[test]
     fn versions_compare_numerically() {
@@ -216,5 +274,7 @@ mod tests {
         assert_eq!(version_pair("0.2.0"), Some((0, 2, 0)));
         assert!(version_pair("v0.10.0").unwrap() > version_pair("0.9.2").unwrap());
         assert_eq!(version_pair("abc"), None);
+        assert_eq!(version_pair("v1.2.3-rc.1"), None);
+        assert_eq!(version_pair("1.2.3.4"), None);
     }
 }

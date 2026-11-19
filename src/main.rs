@@ -21,7 +21,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use windows::core::{w, PCWSTR};
 use windows::Win32::Foundation::{CloseHandle, GetLastError, ERROR_ALREADY_EXISTS};
-use windows::Win32::System::Threading::{CreateEventW, CreateMutexW, SetEvent};
+use windows::Win32::System::Threading::{CreateEventW, CreateMutexW, ReleaseMutex, SetEvent};
 
 pub const INSTANCE_MUTEX: PCWSTR = w!("Local\\Refined");
 pub const RESTORE_EVENT: PCWSTR = w!("Local\\Refined.Restore");
@@ -174,14 +174,16 @@ fn main() -> eframe::Result {
             .map(|d| format!("{d}\\Refined"))
             .unwrap_or_else(|_| ".".to_string());
         let _ = std::fs::create_dir_all(&dir);
-        let _ = std::fs::write(
-            format!("{dir}\\panic.log"),
-            format!("{info}\n"),
-        );
+        let _ = std::fs::write(format!("{dir}\\panic.log"), format!("{info}\n"));
     }));
 
+    if !updater::wait_for_previous_process() {
+        return Ok(());
+    }
+
     // Single instance mutex and restore event
-    let restore_event = unsafe { CreateEventW(None, false, false, RESTORE_EVENT) }.expect("restore event");
+    let restore_event =
+        unsafe { CreateEventW(None, false, false, RESTORE_EVENT) }.expect("restore event");
     let instance = unsafe { CreateMutexW(None, true, INSTANCE_MUTEX) }.expect("instance mutex");
 
     if unsafe { GetLastError() } == ERROR_ALREADY_EXISTS {
@@ -220,9 +222,7 @@ fn main() -> eframe::Result {
     let demo_opts = app::DemoOptions::none();
 
     #[cfg(feature = "demo")]
-    let inner_size = demo_opts
-        .size
-        .unwrap_or([960.0, 680.0]);
+    let inner_size = demo_opts.size.unwrap_or([960.0, 680.0]);
     #[cfg(not(feature = "demo"))]
     let inner_size = [960.0, 680.0];
 
@@ -237,6 +237,7 @@ fn main() -> eframe::Result {
                 width: 64,
                 height: 64,
             }))
+            .with_active(initial_visible)
             .with_visible(initial_visible),
         ..Default::default()
     };
@@ -263,6 +264,7 @@ fn main() -> eframe::Result {
     quitting.store(true, Ordering::Relaxed);
     unsafe {
         let _ = CloseHandle(restore_event);
+        let _ = ReleaseMutex(instance);
         let _ = CloseHandle(instance);
     }
     result

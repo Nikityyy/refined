@@ -1,8 +1,8 @@
 [package]
 name = "refined"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2021"
-description = "AI text refiner for Windows: select text anywhere, press Alt+Q, get polished text back in place."
+description = "AI text refiner for Windows: select text anywhere, press Alt+V, get polished text back in place."
 license = "MIT"
 
 [features]
@@ -23,6 +23,7 @@ sha2 = "0.10"
 version = "0.62"
 features = [
     "Win32_Foundation",
+    "Win32_Graphics_Dwm",
     "Win32_Graphics_Gdi",
     "Win32_Security",
     "Win32_System_LibraryLoader",

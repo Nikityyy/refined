@@ -14,12 +14,12 @@ try {
             ) | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
         }
     }
-    if (-not $Iscc) { throw 'Install Inno Setup 6.7.4 or newer, or pass -Iscc with the path to ISCC.exe.' }
+    if (-not $Iscc) { throw 'Install Inno Setup 6.7.3 or newer, or pass -Iscc with the path to ISCC.exe.' }
     $manifest = Get-Content Cargo.toml -Raw
     $version = [regex]::Match($manifest, '(?m)^version\s*=\s*"(\d+\.\d+\.\d+)"').Groups[1].Value
     if (-not $version) { throw 'Could not read the version from Cargo.toml.' }
     Write-Host "Building Refined release binary (v$version)..." -ForegroundColor Cyan
-    & cargo build --release
+    & cargo build --release --locked
     if ($LASTEXITCODE -ne 0) { throw 'Release build failed.' }
     Write-Host "Compiling Inno Setup installer..." -ForegroundColor Cyan
     & $Iscc "/DAppVersion=$version" installer\refined.iss

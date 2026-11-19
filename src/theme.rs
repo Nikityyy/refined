@@ -601,7 +601,7 @@ pub fn kbd_button(
 
     let (rect, response) = ui.allocate_exact_size(Vec2::new(width, height), Sense::click());
 
-    let fill = if response.hovered() {
+    let fill = if response.hovered() || response.has_focus() {
         if primary {
             theme.accent_hover
         } else {
@@ -612,7 +612,7 @@ pub fn kbd_button(
     } else {
         theme.surface_elevated
     };
-    let corner = CornerRadius::same(4);
+    let corner = CornerRadius::same(if primary { 16 } else { 6 });
     ui.painter().rect_filled(rect, corner, fill);
     if !primary {
         ui.painter()

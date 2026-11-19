@@ -1,6 +1,6 @@
 //! Local persistent store for Refined settings, actions, and history.
 
-use crate::actions::{default_actions, ActionItem};
+use crate::actions::{default_actions, refresh_builtins, ActionItem};
 use crate::groq::GroqConfig;
 use crate::history::HistoryEntry;
 use serde::{Deserialize, Serialize};
@@ -34,6 +34,36 @@ fn quarantine_corrupt(path: &std::path::Path) {
     let _ = std::fs::rename(path, path.with_file_name(name));
 }
 
+/// The user-editable global shortcut. `modifier` is one of
+/// [`HOTKEY_MODIFIERS`], `key` one of [`HOTKEY_KEY_CHOICES`]. Stored as
+/// plain strings so settings.json stays hand-readable and old files
+/// forward-upgrade via `#[serde(default)]`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct HotkeyConfig {
+    pub modifier: String,
+    pub key: String,
+}
+
+impl Default for HotkeyConfig {
+    fn default() -> Self {
+        Self {
+            modifier: "Alt".to_string(),
+            key: "V".to_string(),
+        }
+    }
+}
+
+// No Ctrl+Alt combos here: on German keyboards Ctrl+Alt is AltGr, and a
+// hotkey on it breaks every special character the user types.
+pub const HOTKEY_MODIFIERS: &[&str] = &["Alt", "Alt+Shift"];
+
+pub const HOTKEY_KEY_CHOICES: &[&str] = &[
+    "A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M", //
+    "N", "O", "P", "Q", "R", "S", "T", "U", "V", "W", "X", "Y", "Z", //
+    "0", "1", "2", "3", "4", "5", "6", "7", "8", "9", //
+    "F1", "F2", "F3", "F4", "F5", "F6", "F7", "F8", "F9", "F10", "F11", "F12",
+];
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppSettings {
     pub groq: GroqConfig,
@@ -41,6 +71,8 @@ pub struct AppSettings {
     pub selected_language: String,
     pub custom_language: String,
     pub theme_mode: ThemeMode,
+    #[serde(default)]
+    pub hotkey: HotkeyConfig,
 }
 
 impl Default for AppSettings {
@@ -51,6 +83,7 @@ impl Default for AppSettings {
             selected_language: "auto".to_string(),
             custom_language: String::new(),
             theme_mode: ThemeMode::Dark,
+            hotkey: HotkeyConfig::default(),
         }
     }
 }
@@ -67,7 +100,7 @@ impl Store {
         let _ = create_dir_all(&data_dir);
 
         let settings_file = data_dir.join("settings.json");
-        let settings = if settings_file.exists() {
+        let mut settings = if settings_file.exists() {
             match read_json_bom_tolerant::<AppSettings>(&settings_file) {
                 Some(s) => s,
                 // A silent default would wipe the stored API key and every
@@ -83,6 +116,16 @@ impl Store {
         } else {
             AppSettings::default()
         };
+
+        // Earlier releases always used this fixed output limit.
+        if !settings.groq.output_limit_edited && settings.groq.max_completion_tokens == 32768 {
+            settings.groq.max_completion_tokens = 0;
+        }
+
+        if settings.groq.global_system_prompt == crate::groq::PREVIOUS_SYSTEM_PROMPT {
+            settings.groq.global_system_prompt = crate::groq::STUDY_SYSTEM_PROMPT.into();
+        }
+        refresh_builtins(&mut settings.actions);
 
         let history_file = data_dir.join("history.json");
         let mut history: Vec<HistoryEntry> = if history_file.exists() {
