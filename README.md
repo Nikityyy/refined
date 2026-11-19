@@ -35,7 +35,7 @@ I measured the Groq models available to my key on six short study tasks. **Study
 
 ## How it works
 
-Refined is a Rust app with an egui desktop interface. It uses Windows clipboard and keyboard APIs to read selected text and paste the result. Structure supplies formatted headings and lists to editors that accept rich HTML paste, with a readable outline for plain-text editors. Other edits use a plain-text paste and inherit formatting according to the editor. Selected text and prompts go to Groq for processing. Settings, the API key, and edit history are stored under `%LOCALAPPDATA%\Refined`. Treat that folder as private. Uninstalling keeps it.
+Refined is a Rust app with an egui desktop interface. It uses Windows clipboard and keyboard APIs to read selected text and paste the result. When an action returns headings, lists, bold, or italics, Refined supplies formatted HTML and a readable plain-text version. Refined uses the same formats when you copy from the diff or history. Unformatted results use a plain-text paste. Selected text and prompts go to Groq for processing. Settings, the API key, and edit history are stored under `%LOCALAPPDATA%\Refined`. Treat that folder as private. Uninstalling keeps it.
 
 For my v0.3.0 measurements, the portable executable was 4.56 MB and the installer was 4.00 MB. On my Windows test machine with 160 saved edits, the median working set was about 66 MiB after starting in the tray and 114 MiB with Studio open. Refined loads its fonts and history when needed and builds a history diff when I open it.
 

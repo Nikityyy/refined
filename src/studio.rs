@@ -566,7 +566,7 @@ impl Studio {
                                     if spectrum_button_compact(ui, Some(icons::COPY), "Copy", false, theme)
                                         .clicked()
                                     {
-                                        crate::clipboard::set_clipboard_text(&entry.refined_text);
+                                        crate::clipboard::copy_refinement(&entry.refined_text);
                                     }
                                 });
                             });

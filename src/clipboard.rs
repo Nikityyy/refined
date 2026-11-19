@@ -89,10 +89,10 @@ fn write_clipboard(text: &str, html: Option<&str>, owner: Option<HWND>) -> bool 
                     std::mem::size_of_val(wide.as_slice()),
                 );
                 let written = EmptyClipboard().is_ok()
-                    && set_clipboard_bytes(CF_UNICODETEXT, text_bytes)
                     && html
                         .zip(html_format)
-                        .is_none_or(|(html, format)| set_clipboard_bytes(format, html.as_bytes()));
+                        .is_none_or(|(html, format)| set_clipboard_bytes(format, html.as_bytes()))
+                    && set_clipboard_bytes(CF_UNICODETEXT, text_bytes);
                 let _ = CloseClipboard();
                 return written;
             }
@@ -215,28 +215,38 @@ pub fn capture_selection_with_window() -> Option<CapturedSelection> {
     None
 }
 
-/// Replaces text in target window: restores target window focus, normalizes CRLF,
-/// pastes via Ctrl+V.
-pub fn replace_selection_in_target(target_hwnd: HWND, new_text: &str, structure: bool) -> bool {
+/// Copies a refinement with the same clipboard formats used for in-place replacement.
+pub fn copy_refinement(text: &str) -> bool {
+    write_refinement(text, clipboard_owner()).is_some()
+}
+
+/// Returns whether the clipboard contains HTML, or None if the write failed.
+fn write_refinement(text: &str, owner: Option<HWND>) -> Option<bool> {
+    let rich = crate::rich_text::render(text);
+    let plain = rich.as_ref().map_or(text, |rich| rich.plain.as_str());
+    let normalized = plain.replace("\r\n", "\n").replace('\n', "\r\n");
+    let html = rich.as_ref().map(|rich| rich.html.as_str());
+    write_clipboard(&normalized, html, owner).then_some(html.is_some())
+}
+
+fn clipboard_owner() -> Option<HWND> {
     let owner = unsafe { GetActiveWindow() };
-    let owner = (!owner.0.is_null()).then_some(owner);
-    let rich = structure
-        .then(|| crate::rich_text::render(new_text))
-        .flatten();
+    (!owner.0.is_null()).then_some(owner)
+}
+
+/// Replaces selected text using the richest clipboard format the editor accepts.
+pub fn replace_selection_in_target(target_hwnd: HWND, new_text: &str) -> bool {
+    let owner = clipboard_owner();
     if !focus_target(target_hwnd) {
         return false;
     }
-    let text = rich.as_ref().map_or(new_text, |rich| rich.plain.as_str());
-    let normalized = text.replace("\r\n", "\n").replace('\n', "\r\n");
-    if !write_clipboard(
-        &normalized,
-        rich.as_ref().map(|rich| rich.html.as_str()),
-        owner,
-    ) || unsafe { GetForegroundWindow() } != target_hwnd
-    {
+    let Some(has_html) = write_refinement(new_text, owner) else {
+        return false;
+    };
+    if unsafe { GetForegroundWindow() } != target_hwnd {
         return false;
     }
-    if rich.is_some() {
+    if has_html {
         if let Some(pasted) = crate::word::paste_html(target_hwnd) {
             return pasted;
         }

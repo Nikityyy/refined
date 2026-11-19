@@ -410,12 +410,8 @@ impl Hud {
             } => {
                 let hwnd = HWND(self.target_hwnd as *mut std::ffi::c_void);
                 let changed = self.original_text != refined_text;
-                let applied = changed
-                    && crate::clipboard::replace_selection_in_target(
-                        hwnd,
-                        &refined_text,
-                        action_id == "structure",
-                    );
+                let applied =
+                    changed && crate::clipboard::replace_selection_in_target(hwnd, &refined_text);
                 if changed && self.target_hwnd != 0 {
                     self.awaiting_paste_blur = true;
                     self.focus_requested = true;
@@ -958,7 +954,7 @@ impl Hud {
                         .clicked()
                         || (ctx.input_mut(|input| input.consume_key(egui::Modifiers::CTRL, Key::C)))
                     {
-                        crate::clipboard::set_clipboard_text(refined_text);
+                        crate::clipboard::copy_refinement(refined_text);
                     }
 
                     if *applied

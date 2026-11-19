@@ -139,6 +139,20 @@ mod tests {
     }
 
     #[test]
+    fn renders_bold_terms_in_a_numbered_list_without_a_heading() {
+        let rendered = render(
+            "Betriebswirtschaft ist wichtig.\n\n1. **\u{00d6}konomie** - Produktion und Konsum.\n2. **Wirtschaft** - G\u{00fc}ter und Dienstleistungen.",
+        ).unwrap();
+        assert!(rendered.html.contains("<ol>"));
+        assert!(rendered.html.contains("<strong>\u{00d6}konomie</strong>"));
+        assert!(rendered.html.contains("<strong>Wirtschaft</strong>"));
+        assert!(rendered
+            .plain
+            .contains("1. \u{00d6}konomie - Produktion und Konsum."));
+        assert!(!rendered.plain.contains("**"));
+    }
+
+    #[test]
     fn leaves_unformatted_text_to_the_standard_paste_path() {
         assert!(render("Ordinary text").is_none());
     }
