@@ -184,6 +184,8 @@ impl Hud {
         self.presented = false;
         self.state = HudState::SelectingAction;
         self.error_message = None;
+        self.original_text = String::new();
+        self.custom_rewrite_input = String::new();
         // Invalidate any in-flight worker so its completion is dropped.
         self.worker_rx = None;
     }
@@ -386,7 +388,7 @@ impl Hud {
                     action_name.clone(),
                     self.original_text.clone(),
                     refined_text.clone(),
-                    diff_chunks.clone(),
+                    &diff_chunks,
                     stats.clone(),
                     model.clone(),
                     duration_ms,

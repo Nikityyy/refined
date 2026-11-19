@@ -69,7 +69,7 @@ fn seed_history(path: &str) {
             seed.action_name.clone(),
             seed.original_text,
             seed.refined_text,
-            chunks,
+            &chunks,
             stats,
             "openai/gpt-oss-120b".to_string(),
             seed.duration_ms,

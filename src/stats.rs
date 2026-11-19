@@ -15,7 +15,7 @@ pub struct AggregatedStats {
     pub daily_counts: Vec<(String, usize)>, // last 7 days (e.g. "Mon", count)
 }
 
-pub fn calculate_stats(history: &[HistoryEntry]) -> AggregatedStats {
+pub fn calculate_stats(history: &mut [HistoryEntry]) -> AggregatedStats {
     if history.is_empty() {
         return AggregatedStats::default();
     }
@@ -26,19 +26,12 @@ pub fn calculate_stats(history: &[HistoryEntry]) -> AggregatedStats {
     let mut action_counts: HashMap<String, usize> = HashMap::new();
     let mut total_duration = 0u128;
 
-    for entry in history {
+    for entry in history.iter_mut() {
         total_orig_words += entry.stats.original_words;
         total_ref_words += entry.stats.refined_words;
         *action_counts.entry(entry.action_name.clone()).or_insert(0) += 1;
         total_duration += entry.duration_ms;
-        // Only words the user would have had to re-type by hand count as
-        // saved editing time; crediting the whole text volume invents time.
-        // Insert-side only: a replacement pair counts once, not twice.
-        for chunk in &entry.diff_chunks {
-            if chunk.kind == crate::diff::DiffKind::Insert {
-                changed_words += chunk.text.split_whitespace().count();
-            }
-        }
+        changed_words += entry.inserted_words();
     }
 
     // Hand-retyping the changed portion at ~30 words per minute.
@@ -68,4 +61,3 @@ pub fn calculate_stats(history: &[HistoryEntry]) -> AggregatedStats {
         daily_counts,
     }
 }
-

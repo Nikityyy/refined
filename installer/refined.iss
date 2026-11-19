@@ -1,4 +1,4 @@
-﻿#ifndef AppVersion
+#ifndef AppVersion
   #error Pass /DAppVersion from build-installer.ps1
 #endif
 
@@ -31,7 +31,10 @@ SetupMutex=Local\RefinedSetup
 CloseApplications=no
 RestartApplications=no
 Uninstallable=yes
-Compression=lzma2/ultra64
+Compression=lzma/ultra64
+LZMADictionarySize=4096
+LZMANumFastBytes=273
+InternalCompressLevel=ultra
 SolidCompression=yes
 OutputDir=..\target\installer
 OutputBaseFilename=Refined-Setup-{#AppVersion}

@@ -37,6 +37,8 @@ I measured the Groq models available to my key on six short study tasks. **Study
 
 Refined is a Rust app with an egui desktop interface. It uses Windows clipboard and keyboard APIs to read selected text and paste the result. Rich formatting depends on how the editor handles a plain-text paste. Selected text and prompts go to Groq for processing. Settings, the API key, and edit history are stored under `%LOCALAPPDATA%\Refined`. Treat that folder as private. Uninstalling keeps it.
 
+The portable executable is 4.56 MB and the installer is 4.00 MB. On my Windows test machine with 160 saved edits, the median working set was about 66 MiB after starting in the tray and 114 MiB with Studio open. Refined loads its fonts and history when needed and builds a history diff when I open it.
+
 To build from source, install [Rust](https://rustup.rs) with the Windows MSVC tools and run `cargo build --release --locked`. For the installer, install [Inno Setup](https://jrsoftware.org/isdl.php) 6.7.3 or newer and run `powershell -File .\build-installer.ps1`.
 
 ## Building Refined

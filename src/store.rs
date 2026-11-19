@@ -92,6 +92,7 @@ pub struct Store {
     pub settings: AppSettings,
     pub history: Vec<HistoryEntry>,
     data_dir: PathBuf,
+    history_loaded: bool,
 }
 
 impl Store {
@@ -127,35 +128,25 @@ impl Store {
         }
         refresh_builtins(&mut settings.actions);
 
-        let history_file = data_dir.join("history.json");
-        let mut history: Vec<HistoryEntry> = if history_file.exists() {
-            match read_json_bom_tolerant::<Vec<HistoryEntry>>(&history_file) {
-                Some(h) => h,
-                None => {
-                    eprintln!(
-                        "[refined] history.json unreadable, history starts empty (backup will be created)"
-                    );
-                    quarantine_corrupt(&history_file);
-                    Vec::new()
-                }
-            }
-        } else {
-            Vec::new()
-        };
-        // The chunks are not persisted (they double the file for data the
-        // diff engine recomputes deterministically); restore them in memory.
-        for entry in &mut history {
-            if entry.diff_chunks.is_empty() {
-                let (chunks, _stats) =
-                    crate::diff::compute_diff(&entry.original_text, &entry.refined_text);
-                entry.diff_chunks = chunks;
-            }
+        Self { settings, history: Vec::new(), data_dir, history_loaded: false }
+    }
+
+    pub fn load_history(&mut self) {
+        if self.history_loaded {
+            return;
+        }
+        self.history_loaded = true;
+        let path = self.data_dir.join("history.json");
+        if !path.exists() {
+            return;
         }
 
-        Self {
-            settings,
-            history,
-            data_dir,
+        match read_json_bom_tolerant(&path) {
+            Some(history) => self.history = history,
+            None => {
+                eprintln!("[refined] history.json unreadable, starting with an empty history");
+                quarantine_corrupt(&path);
+            }
         }
     }
 
@@ -191,6 +182,7 @@ impl Store {
     }
 
     pub fn add_history(&mut self, entry: HistoryEntry) {
+        self.load_history();
         self.history.insert(0, entry);
         if self.history.len() > HISTORY_LIMIT {
             self.history.truncate(HISTORY_LIMIT);

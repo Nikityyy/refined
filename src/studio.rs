@@ -31,7 +31,7 @@ pub struct Studio {
     pub current_tab: StudioTab,
     pub history_search: String,
     pub history_action_filter: String,
-    pub expanded_history_id: Option<String>,
+    expanded_history: Option<(String, Vec<crate::diff::DiffChunk>)>,
     catalog_key: String,
     catalog_error: Option<String>,
     models_rx: Option<Receiver<Result<Vec<GroqModel>, String>>>,
@@ -67,7 +67,7 @@ impl Studio {
             current_tab: StudioTab::History,
             history_search: String::new(),
             history_action_filter: "All".to_string(),
-            expanded_history_id: None,
+            expanded_history: None,
             catalog_key: String::new(),
             catalog_error: None,
             models_rx: None,
@@ -288,6 +288,7 @@ impl Studio {
 
     pub fn update(&mut self, ui: &mut Ui, store: &mut Store, theme: &SpectrumTheme) {
         self.flush_settings(store);
+        store.load_history();
 
         ui.set_width(ui.available_width());
 
@@ -359,6 +360,9 @@ impl Studio {
             self.render_update_banner(ui, theme, &format!("Refined {version} is ready to install."));
         }
 
+        if self.current_tab != StudioTab::History {
+            self.expanded_history = None;
+        }
         match self.current_tab {
             StudioTab::History => self.render_history_tab(ui, store, theme),
             StudioTab::Statistics => self.render_statistics_tab(ui, store, theme),
@@ -494,7 +498,9 @@ impl Studio {
                 ui.spacing_mut().item_spacing = Vec2::new(8.0, 8.0);
 
                 for entry in filtered {
-                    let is_expanded = self.expanded_history_id.as_deref() == Some(&entry.id);
+                    let diff = self.expanded_history.as_ref()
+                        .filter(|(id, _)| id == &entry.id).map(|(_, chunks)| chunks);
+                    let is_expanded = diff.is_some();
 
                     card_frame(theme, egui::Margin::same(12))
                         .show(ui, |ui| {
@@ -565,7 +571,7 @@ impl Studio {
                             ui.add_space(4.0);
 
                             // Content preview
-                            if is_expanded {
+                            if let Some(chunks) = diff {
                                 ui.label(RichText::new("Original text").font(FontId::proportional(12.0)).color(theme.text_secondary));
                                 ui.label(RichText::new(&entry.original_text).font(FontId::proportional(13.0)).color(theme.text_primary));
                                 ui.add_space(6.0);
@@ -577,7 +583,7 @@ impl Studio {
                                     .corner_radius(CornerRadius::same(4))
                                     .inner_margin(egui::Margin::same(8))
                                     .show(ui, |ui| {
-                                        render_diff_view(ui, &entry.diff_chunks, theme);
+                                        render_diff_view(ui, chunks, theme);
                                     });
                             } else {
                                 // Char-boundary-safe preview: raw byte slicing
@@ -591,17 +597,20 @@ impl Studio {
 
         if let Some(id) = delete_id {
             store.delete_history_entry(&id);
+            if self.expanded_history.as_ref().is_some_and(|(shown, _)| shown == &id) {
+                self.expanded_history = None;
+            }
         }
         if let Some(id) = toggle_diff_id {
-            if self.expanded_history_id.as_deref() == Some(&id) {
-                self.expanded_history_id = None;
-            } else {
-                self.expanded_history_id = Some(id);
+            if self.expanded_history.as_ref().is_some_and(|(shown, _)| shown == &id) {
+                self.expanded_history = None;
+            } else if let Some(entry) = store.history.iter().find(|entry| entry.id == id) {
+                self.expanded_history = Some((id, crate::diff::compute_diff(&entry.original_text, &entry.refined_text).0));
             }
         }
     }
 
-    fn render_statistics_tab(&mut self, ui: &mut Ui, store: &Store, theme: &SpectrumTheme) {
+    fn render_statistics_tab(&mut self, ui: &mut Ui, store: &mut Store, theme: &SpectrumTheme) {
         let today = chrono::Local::now().format("%Y-%m-%d").to_string();
         let key = (
             store.history.len(),
@@ -613,7 +622,7 @@ impl Studio {
                 cached.clone()
             }
             _ => {
-                let stats = calculate_stats(&store.history);
+                let stats = calculate_stats(&mut store.history);
                 self.stats_cache = Some((key.0, key.1, key.2, stats.clone()));
                 stats
             }

@@ -66,6 +66,7 @@ pub struct RefinedApp {
     restore_listener: Option<std::thread::JoinHandle<()>>,
     root_window_hidden: bool,
     root_hwnd: HWND,
+    fonts_loaded: bool,
     /// Live keybind shared with the hotkey thread; bumped via
     /// `hotkey_version` after a Settings change to trigger re-registration.
     pub hotkey: Arc<Mutex<HotkeyConfig>>,
@@ -87,9 +88,6 @@ impl RefinedApp {
         initially_visible: bool,
         #[cfg_attr(not(feature = "demo"), allow(unused_variables))] demo_opts: DemoOptions,
     ) -> Self {
-        // Setup Segoe UI system fonts
-        theme::setup_custom_fonts(&cc.egui_ctx);
-
         // Hotkey listener: started here, not in main, because it needs the
         // egui context to wake the UI for immediate HUD opens. The combo is
         // user-configurable; the listener re-registers when the version is
@@ -188,6 +186,7 @@ impl RefinedApp {
             restore_listener: Some(restore_listener),
             root_window_hidden: !initially_visible,
             root_hwnd,
+            fonts_loaded: false,
             hotkey,
             hotkey_version,
             hotkey_applied: hotkey_cfg,
@@ -364,6 +363,11 @@ nonsense, which is a very serious problem for publishing.\n";
                 (hud.position, hud.desired_height(&store.settings))
             })
         };
+        if !self.fonts_loaded && (hud_layout.is_some() || self.studio_open.load(Ordering::Relaxed))
+        {
+            theme::setup_custom_fonts(&ctx);
+            self.fonts_loaded = true;
+        }
         if let Some((position, height)) = hud_layout {
             let hud = self.hud.clone();
             let store = self.store.clone();

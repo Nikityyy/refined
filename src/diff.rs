@@ -100,7 +100,7 @@ fn tokenize(s: &str) -> Vec<&str> {
 /// which is a valid (just coarser) diff. MAX_LCS_CELLS keeps the DP at
 /// a few hundred MB worst case — fine relative to typical documents —
 /// while bounding memory deterministically.
-const MAX_LCS_CELLS: usize = 256 * 1024 * 1024 / 4; // 256 MB worth of u32 cells
+const MAX_LCS_CELLS: usize = 64 * 1024 * 1024; // at most 128 MiB of u16 cells
 
 /// Computes word-level diff between `original` and `refined`.
 pub fn compute_diff(original: &str, refined: &str) -> (Vec<DiffChunk>, DiffStats) {
@@ -134,7 +134,8 @@ pub fn compute_diff(original: &str, refined: &str) -> (Vec<DiffChunk>, DiffStats
     let mid_orig = &orig_tokens[start..end_o];
     let mid_ref = &ref_tokens[start..end_r];
     if !mid_orig.is_empty() || !mid_ref.is_empty() {
-        if mid_orig.len().saturating_mul(mid_ref.len()) > MAX_LCS_CELLS {
+        let cells = (mid_orig.len() + 1).saturating_mul(mid_ref.len() + 1);
+        if mid_orig.is_empty() || mid_ref.is_empty() || cells > MAX_LCS_CELLS {
             // 2a. Changed middle too large for the DP table: a wholesale
             //     replace keeps the diff correct and the memory bounded.
             if !mid_orig.is_empty() {
@@ -156,7 +157,9 @@ pub fn compute_diff(original: &str, refined: &str) -> (Vec<DiffChunk>, DiffStats
             let n = mid_orig.len();
             let m = mid_ref.len();
             let stride = m + 1;
-            let mut dp = vec![0u32; (n + 1) * stride];
+            // The smaller input is bounded by sqrt(MAX_LCS_CELLS).
+            debug_assert!(n.min(m) <= usize::from(u16::MAX));
+            let mut dp = vec![0u16; cells];
             for i in 0..n {
                 for j in 0..m {
                     let here = (i + 1) * stride + (j + 1);
@@ -236,14 +239,20 @@ mod tests {
         let (chunks, stats) = compute_diff("The quick brown fox", "The fast brown fox jumps");
         assert_eq!(stats.original_words, 4);
         assert_eq!(stats.refined_words, 5);
-        assert!(chunks.iter().any(|c| c.kind == DiffKind::Delete && c.text.contains("quick")));
-        assert!(chunks.iter().any(|c| c.kind == DiffKind::Insert && c.text.contains("fast")));
+        assert!(chunks
+            .iter()
+            .any(|c| c.kind == DiffKind::Delete && c.text.contains("quick")));
+        assert!(chunks
+            .iter()
+            .any(|c| c.kind == DiffKind::Insert && c.text.contains("fast")));
     }
 
     #[test]
     fn test_diff_cjk() {
         let (chunks, _) = compute_diff("今日的天气很好", "今日的天气非常非常好");
-        assert!(chunks.iter().any(|c| c.kind == DiffKind::Insert && c.text.contains("非常非常")));
+        assert!(chunks
+            .iter()
+            .any(|c| c.kind == DiffKind::Insert && c.text.contains("非常非常")));
     }
 
     #[test]

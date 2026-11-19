@@ -1,6 +1,6 @@
 //! Refinement history records and persistence models.
 
-use crate::diff::{DiffChunk, DiffStats};
+use crate::diff::{compute_diff, DiffChunk, DiffKind, DiffStats};
 use chrono::{DateTime, Local};
 use serde::{Deserialize, Serialize};
 
@@ -12,11 +12,8 @@ pub struct HistoryEntry {
     pub action_name: String,
     pub original_text: String,
     pub refined_text: String,
-    /// Never persisted: the chunks are recomputed from the two texts at
-    /// load time (the diff engine is deterministic), which roughly halves
-    /// the history file size and the write time.
-    #[serde(default, skip_serializing)]
-    pub diff_chunks: Vec<DiffChunk>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    inserted_words: Option<usize>,
     pub stats: DiffStats,
     pub model: String,
     pub duration_ms: u128,
@@ -29,7 +26,7 @@ impl HistoryEntry {
         action_name: String,
         original_text: String,
         refined_text: String,
-        diff_chunks: Vec<DiffChunk>,
+        diff_chunks: &[DiffChunk],
         stats: DiffStats,
         model: String,
         duration_ms: u128,
@@ -44,11 +41,59 @@ impl HistoryEntry {
             action_name,
             original_text,
             refined_text,
-            diff_chunks,
+            inserted_words: Some(count_inserted_words(diff_chunks)),
             stats,
             model,
             duration_ms,
             language,
         }
+    }
+
+    pub fn inserted_words(&mut self) -> usize {
+        *self.inserted_words.get_or_insert_with(|| {
+            let (chunks, _) = compute_diff(&self.original_text, &self.refined_text);
+            count_inserted_words(&chunks)
+        })
+    }
+}
+
+fn count_inserted_words(chunks: &[DiffChunk]) -> usize {
+    chunks
+        .iter()
+        .filter(|chunk| chunk.kind == DiffKind::Insert)
+        .map(|chunk| chunk.text.split_whitespace().count())
+        .sum()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn old_history_without_inserted_word_count_loads_and_migrates() {
+        let (chunks, stats) = compute_diff("Water flows", "Cold water flows");
+        let entry = HistoryEntry::new(
+            "polish".into(),
+            "Polish".into(),
+            "Water flows".into(),
+            "Cold water flows".into(),
+            &chunks,
+            stats,
+            "model".into(),
+            15,
+            "auto".into(),
+        );
+        let mut old = serde_json::to_value(&entry).unwrap();
+        let expected = old
+            .as_object_mut()
+            .unwrap()
+            .remove("inserted_words")
+            .unwrap();
+        let mut decoded: HistoryEntry = serde_json::from_value(old).unwrap();
+        assert_eq!(serde_json::json!(decoded.inserted_words()), expected);
+        assert_eq!(
+            serde_json::to_value(decoded).unwrap()["inserted_words"],
+            expected
+        );
     }
 }
