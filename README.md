@@ -2,7 +2,7 @@
 
 I type my study notes in whatever app I already have open. When a paragraph is messy or too long, I used to copy it into a chatbot, explain what I wanted, and paste the answer back. I wanted to stay in my notes.
 
-Refined is a Windows app I built for that. I select a passage, press **Alt+V**, and choose an action. Refined replaces the selection in place and shows what changed. I can turn a definition into flashcards, shorten lecture notes, or untangle an explanation without switching apps.
+Refined is a Windows app I built for that. I select a passage, press **Ctrl+Shift+X**, and choose an action. Refined replaces the selection in place and shows what changed. I can turn a definition into flashcards, shorten lecture notes, or untangle an explanation without switching apps.
 
 <img src="docs/hud-diff.png" alt="Refined showing a flashcard diff after editing the selected study notes" width="480">
 
@@ -23,7 +23,7 @@ Open **Settings** and paste a [Groq API key](https://console.groq.com/keys). Ref
 
 ## Use
 
-- **Alt+V** opens the palette when text is selected. Use the number keys or **↑ / ↓** and **Enter** to pick an action. Change the shortcut in Settings.
+- **Ctrl+Shift+X** opens the palette when text is selected. Use the number keys or **↑ / ↓** and **Enter** to pick an action. Change the shortcut in Settings.
 - **Polish**, **Condense**, **Expand**, **Structure**, and **Simplify** edit your notes. **Flashcards** makes question-and-answer pairs for active recall. **Rewrite as…** takes your own instructions.
 - The diff shows what changed after the edit. Use **Undo** to ask the editor to undo the paste. **Esc** or a click outside closes the palette.
 - Refined uses the selection’s language by default. Pick a different output language from the palette when needed.

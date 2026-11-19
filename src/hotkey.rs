@@ -1,9 +1,6 @@
 //! Global Windows hotkey registration and selection trigger.
 //!
-//! The default is Alt+V ("verfeinern"/refine): on German keyboards AltGr+Q
-//! types "@"" and Windows cannot tell AltGr from Alt in RegisterHotKey, so an
-//! Alt+Q hotkey would fire in the middle of every email address the user
-//! types. Alt+V has no AltGr assignment and no common global owner.
+//! Ctrl+Shift+X is the default.
 //!
 //! The combo is user-configurable (Studio > Settings) and applied live: the
 //! listener watches a version counter and re-registers on change, falling
@@ -16,14 +13,15 @@ use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex};
 use windows::Win32::Foundation::POINT;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    RegisterHotKey, UnregisterHotKey, HOT_KEY_MODIFIERS, MOD_ALT, MOD_NOREPEAT, MOD_SHIFT,
+    RegisterHotKey, UnregisterHotKey, HOT_KEY_MODIFIERS, MOD_ALT, MOD_CONTROL, MOD_NOREPEAT,
+    MOD_SHIFT,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     DispatchMessageW, GetCursorPos, PeekMessageW, TranslateMessage, MSG, PM_REMOVE, WM_HOTKEY,
     WM_QUIT,
 };
 
-const HOTKEY_ID: i32 = 0x4156; // 'A' 'V'
+const HOTKEY_ID: i32 = 0x4156; // Refined hotkey
 
 #[derive(Debug, Clone)]
 pub struct TriggerPayload {
@@ -35,7 +33,7 @@ pub struct TriggerPayload {
 
 /// Parses the settings key ("V", "4", "F3") into a Windows virtual key code.
 fn parse_key(key: &str) -> Option<u16> {
-    if let Some(n) = key.strip_prefix('F') {
+    if let Some(n) = key.strip_prefix('F').filter(|suffix| !suffix.is_empty()) {
         let n: u16 = n.parse().ok()?;
         if !(1..=12).contains(&n) {
             return None;
@@ -58,6 +56,7 @@ fn parse_key(key: &str) -> Option<u16> {
 /// Parses the full configured combo into (raw modifier bits, virtual key).
 fn parse_combo(cfg: &HotkeyConfig) -> Option<(u32, u16)> {
     let mods = match cfg.modifier.as_str() {
+        "Ctrl+Shift" => MOD_CONTROL.0 | MOD_SHIFT.0,
         "Alt" => MOD_ALT.0,
         "Alt+Shift" => MOD_ALT.0 | MOD_SHIFT.0,
         _ => return None,
@@ -182,4 +181,19 @@ pub fn start_hotkey_listener(
             let _ = UnregisterHotKey(None, HOTKEY_ID);
         }
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_parses_as_ctrl_shift_x() {
+        assert_eq!(
+            parse_combo(&HotkeyConfig::default()),
+            Some((MOD_CONTROL.0 | MOD_SHIFT.0, u16::from(b'X'))),
+        );
+        assert_eq!(parse_key("F"), Some(u16::from(b'F')));
+        assert_eq!(parse_key("F3"), Some(0x72));
+    }
 }

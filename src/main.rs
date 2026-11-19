@@ -209,7 +209,7 @@ fn main() -> eframe::Result {
     let store = Arc::new(Mutex::new(store::Store::open()));
 
     // The hotkey listener is started inside RefinedApp::new: it needs the
-    // egui context to wake the UI on Alt+V, so registration must happen
+    // egui context to wake the UI when the shortcut fires, so registration must happen
     // where the context exists.
     let quitting = Arc::new(AtomicBool::new(false));
     let hotkey_failed = Arc::new(AtomicBool::new(false));

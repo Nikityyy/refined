@@ -15,7 +15,7 @@ use windows::Win32::System::Memory::{
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     GetAsyncKeyState, SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYBD_EVENT_FLAGS,
-    KEYEVENTF_KEYUP, VIRTUAL_KEY, VK_C, VK_CONTROL, VK_MENU, VK_SHIFT, VK_V, VK_Z,
+    KEYEVENTF_KEYUP, VIRTUAL_KEY, VK_C, VK_CONTROL, VK_LSHIFT, VK_MENU, VK_RSHIFT, VK_V, VK_Z,
 };
 use windows::Win32::UI::WindowsAndMessaging::{GetForegroundWindow, SetForegroundWindow};
 
@@ -130,12 +130,16 @@ fn key_event(vk: VIRTUAL_KEY, up: bool) -> INPUT {
 }
 
 fn send_control_key(key: VIRTUAL_KEY, release_modifiers: bool) -> bool {
-    let mut inputs = Vec::with_capacity(6);
+    let mut inputs = Vec::with_capacity(7);
     if release_modifiers {
-        inputs.extend([VK_MENU, VK_SHIFT].into_iter().filter_map(|modifier| {
-            (unsafe { GetAsyncKeyState(i32::from(modifier.0)) } < 0)
-                .then(|| key_event(modifier, true))
-        }));
+        inputs.extend(
+            [VK_MENU, VK_LSHIFT, VK_RSHIFT]
+                .into_iter()
+                .filter_map(|modifier| {
+                    (unsafe { GetAsyncKeyState(i32::from(modifier.0)) } < 0)
+                        .then(|| key_event(modifier, true))
+                }),
+        );
     }
     inputs.extend([
         key_event(VK_CONTROL, false),

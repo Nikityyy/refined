@@ -41,7 +41,7 @@ pub struct Studio {
     pub new_action_desc: String,
     pub new_action_icon: String,
     pub new_action_prompt: String,
-    /// Set from the hotkey thread each frame: Alt+V failed to register.
+    /// Set from the hotkey thread when the configured shortcut fails to register.
     pub hotkey_failed: bool,
     /// Pending settings save: UI edits mark it, and the next update flushes
     /// it at most ~half a second later. A write per keystroke or slider tick

@@ -47,15 +47,15 @@ pub struct HotkeyConfig {
 impl Default for HotkeyConfig {
     fn default() -> Self {
         Self {
-            modifier: "Alt".to_string(),
-            key: "V".to_string(),
+            modifier: "Ctrl+Shift".to_string(),
+            key: "X".to_string(),
         }
     }
 }
 
 // No Ctrl+Alt combos here: on German keyboards Ctrl+Alt is AltGr, and a
 // hotkey on it breaks every special character the user types.
-pub const HOTKEY_MODIFIERS: &[&str] = &["Alt", "Alt+Shift"];
+pub const HOTKEY_MODIFIERS: &[&str] = &["Ctrl+Shift", "Alt", "Alt+Shift"];
 
 pub const HOTKEY_KEY_CHOICES: &[&str] = &[
     "A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M", //
@@ -73,6 +73,19 @@ pub struct AppSettings {
     pub theme_mode: ThemeMode,
     #[serde(default)]
     pub hotkey: HotkeyConfig,
+    #[serde(default)]
+    hotkey_default_migrated: bool,
+}
+
+impl AppSettings {
+    fn migrate_hotkey_default(&mut self) {
+        if !self.hotkey_default_migrated {
+            if self.hotkey.modifier == "Alt" && self.hotkey.key.eq_ignore_ascii_case("V") {
+                self.hotkey = HotkeyConfig::default();
+            }
+            self.hotkey_default_migrated = true;
+        }
+    }
 }
 
 impl Default for AppSettings {
@@ -84,6 +97,7 @@ impl Default for AppSettings {
             custom_language: String::new(),
             theme_mode: ThemeMode::Dark,
             hotkey: HotkeyConfig::default(),
+            hotkey_default_migrated: true,
         }
     }
 }
@@ -117,6 +131,8 @@ impl Store {
         } else {
             AppSettings::default()
         };
+
+        settings.migrate_hotkey_default();
 
         // Earlier releases always used this fixed output limit.
         if !settings.groq.output_limit_edited && settings.groq.max_completion_tokens == 32768 {
@@ -259,6 +275,28 @@ fn read_json_bom_tolerant<T: serde::de::DeserializeOwned>(path: &std::path::Path
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn migrates_only_the_legacy_default_once() {
+        let legacy = |key: &str| {
+            let mut value = serde_json::to_value(AppSettings::default()).unwrap();
+            value.as_object_mut().unwrap().remove("hotkey_default_migrated");
+            value["hotkey"] = serde_json::json!({"modifier": "Alt", "key": key});
+            serde_json::from_value::<AppSettings>(value).unwrap()
+        };
+        let mut settings = legacy("V");
+        settings.migrate_hotkey_default();
+        assert_eq!(settings.hotkey, HotkeyConfig::default());
+
+        settings.hotkey = legacy("V").hotkey;
+        settings.migrate_hotkey_default();
+        assert_eq!(settings.hotkey.key, "V");
+
+        let mut custom = legacy("Q");
+        custom.migrate_hotkey_default();
+        assert_eq!(custom.hotkey.modifier, "Alt");
+        assert_eq!(custom.hotkey.key, "Q");
+    }
 
     #[test]
     fn update_restart_requires_a_closed_palette_and_a_fresh_click() {
