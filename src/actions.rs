@@ -40,7 +40,7 @@ pub fn default_actions() -> Vec<ActionItem> {
         ("expand", "Expand", "Explain the idea with a short example.", icons::CHEVRON_UP,
          "Explain the reasoning behind the notes. When helpful, add one short, clearly labeled illustrative example consistent with the notes. Do not invent supporting facts, citations, or dates."),
         ("structure", "Structure", "Turn dense notes into a study outline.", icons::BULLETED_LIST,
-         "Organize the supplied facts into a short outline using plain-text headings and bullets where helpful. Keep every relevant fact and its qualifiers. Do not supply additional facts or dates."),
+         "Organize the passage using Markdown headings and either bullets or numbering for each list. Reuse the original wording as much as possible. Keep the full meaning of each sentence, every qualifier, and the exact terms used in the notes. Correct obvious misspellings, such as swapped letters, to the closest valid spelling in context. Keep the corrected word in the output; do not replace it with a synonym, a new label, or a paraphrase. If the intended spelling is uncertain, keep the word as written. Do not invent facts or dates."),
         ("simplify", "Simplify", "Explain the same idea in plainer language.", icons::CLEAR,
          "Rewrite in shorter sentences with familiar words. Briefly define necessary technical terms in context. Keep direction, cause and effect, and exceptions intact."),
         ("flashcards", "Flashcards", "Turn notes into questions for active recall.", icons::BULLETED_LIST,

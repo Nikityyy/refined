@@ -25,7 +25,7 @@ Open **Settings** and paste a [Groq API key](https://console.groq.com/keys). Ref
 
 - **Ctrl+Shift+X** opens the palette when text is selected. Use the number keys or **↑ / ↓** and **Enter** to pick an action. Change the shortcut in Settings.
 - **Polish**, **Condense**, **Expand**, **Structure**, and **Simplify** edit your notes. **Flashcards** makes question-and-answer pairs for active recall. **Rewrite as…** takes your own instructions.
-- The diff shows what changed after the edit. Use **Undo** to ask the editor to undo the paste. **Esc** or a click outside closes the palette.
+- Drag the Refined header to move the palette or diff. The diff shows what changed after the edit. Use **Undo** to ask the editor to undo the paste. **Esc** or a click outside closes the palette.
 - Refined uses the selection’s language by default. Pick a different output language from the palette when needed.
 - In Studio, I can see past edits, check how many words I processed, customize the prompts, and add my own actions. Closing Studio keeps Refined in the tray.
 
@@ -35,9 +35,9 @@ I measured the Groq models available to my key on six short study tasks. **Study
 
 ## How it works
 
-Refined is a Rust app with an egui desktop interface. It uses Windows clipboard and keyboard APIs to read selected text and paste the result. Rich formatting depends on how the editor handles a plain-text paste. Selected text and prompts go to Groq for processing. Settings, the API key, and edit history are stored under `%LOCALAPPDATA%\Refined`. Treat that folder as private. Uninstalling keeps it.
+Refined is a Rust app with an egui desktop interface. It uses Windows clipboard and keyboard APIs to read selected text and paste the result. Structure supplies formatted headings and lists to editors that accept rich HTML paste, with a readable outline for plain-text editors. Other edits use a plain-text paste and inherit formatting according to the editor. Selected text and prompts go to Groq for processing. Settings, the API key, and edit history are stored under `%LOCALAPPDATA%\Refined`. Treat that folder as private. Uninstalling keeps it.
 
-The portable executable is 4.56 MB and the installer is 4.00 MB. On my Windows test machine with 160 saved edits, the median working set was about 66 MiB after starting in the tray and 114 MiB with Studio open. Refined loads its fonts and history when needed and builds a history diff when I open it.
+For my v0.3.0 measurements, the portable executable was 4.56 MB and the installer was 4.00 MB. On my Windows test machine with 160 saved edits, the median working set was about 66 MiB after starting in the tray and 114 MiB with Studio open. Refined loads its fonts and history when needed and builds a history diff when I open it.
 
 To build from source, install [Rust](https://rustup.rs) with the Windows MSVC tools and run `cargo build --release --locked`. For the installer, install [Inno Setup](https://jrsoftware.org/isdl.php) 6.7.3 or newer and run `powershell -File .\build-installer.ps1`.
 

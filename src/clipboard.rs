@@ -5,17 +5,19 @@
 use std::ptr;
 use std::thread::sleep;
 use std::time::Duration;
+use windows::core::w;
 use windows::Win32::Foundation::{GlobalFree, HANDLE, HGLOBAL, HWND};
 use windows::Win32::System::DataExchange::{
     CloseClipboard, EmptyClipboard, GetClipboardData, GetClipboardSequenceNumber,
-    IsClipboardFormatAvailable, OpenClipboard, SetClipboardData,
+    IsClipboardFormatAvailable, OpenClipboard, RegisterClipboardFormatW, SetClipboardData,
 };
 use windows::Win32::System::Memory::{
     GlobalAlloc, GlobalLock, GlobalSize, GlobalUnlock, GMEM_MOVEABLE,
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    GetAsyncKeyState, SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYBD_EVENT_FLAGS,
-    KEYEVENTF_KEYUP, VIRTUAL_KEY, VK_C, VK_CONTROL, VK_LSHIFT, VK_MENU, VK_RSHIFT, VK_V, VK_Z,
+    GetActiveWindow, GetAsyncKeyState, SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT,
+    KEYBD_EVENT_FLAGS, KEYEVENTF_KEYUP, VIRTUAL_KEY, VK_C, VK_CONTROL, VK_LSHIFT, VK_MENU,
+    VK_RSHIFT, VK_V, VK_Z,
 };
 use windows::Win32::UI::WindowsAndMessaging::{GetForegroundWindow, SetForegroundWindow};
 
@@ -70,43 +72,51 @@ pub fn get_clipboard_text() -> Option<String> {
 
 /// Sets Unicode text into the Windows clipboard safely without leaking memory.
 pub fn set_clipboard_text(text: &str) -> bool {
-    let wide: Vec<u16> = text.encode_utf16().chain(std::iter::once(0)).collect();
-    let bytes = wide.len() * std::mem::size_of::<u16>();
+    write_clipboard(text, None, None)
+}
 
+fn write_clipboard(text: &str, html: Option<&str>, owner: Option<HWND>) -> bool {
+    let wide: Vec<u16> = text.encode_utf16().chain(std::iter::once(0)).collect();
     unsafe {
-        let mem = match GlobalAlloc(GMEM_MOVEABLE, bytes) {
-            Ok(h) => h,
-            Err(_) => return false,
-        };
-        let ptr = GlobalLock(mem);
-        if ptr.is_null() {
-            let _ = GlobalFree(Some(mem));
+        let html_format = html.map(|_| RegisterClipboardFormatW(w!("HTML Format")));
+        if html_format == Some(0) {
             return false;
         }
-        ptr::copy_nonoverlapping(wide.as_ptr() as *const u8, ptr as *mut u8, bytes);
-        let _ = GlobalUnlock(mem);
-
-        let mut opened = false;
         for _ in 0..5 {
-            if OpenClipboard(None).is_ok() {
-                opened = true;
-                break;
+            if OpenClipboard(owner).is_ok() {
+                let text_bytes = std::slice::from_raw_parts(
+                    wide.as_ptr().cast::<u8>(),
+                    std::mem::size_of_val(wide.as_slice()),
+                );
+                let written = EmptyClipboard().is_ok()
+                    && set_clipboard_bytes(CF_UNICODETEXT, text_bytes)
+                    && html
+                        .zip(html_format)
+                        .is_none_or(|(html, format)| set_clipboard_bytes(format, html.as_bytes()));
+                let _ = CloseClipboard();
+                return written;
             }
             sleep(Duration::from_millis(8));
         }
-        if !opened {
-            let _ = GlobalFree(Some(mem));
-            return false;
-        }
-
-        let _ = EmptyClipboard();
-        let ok = SetClipboardData(CF_UNICODETEXT, Some(HANDLE(mem.0))).is_ok();
-        let _ = CloseClipboard();
-        if !ok {
-            let _ = GlobalFree(Some(mem));
-        }
-        ok
     }
+    false
+}
+
+/// Transfers ownership to Windows on success and frees the allocation on error.
+unsafe fn set_clipboard_bytes(format: u32, bytes: &[u8]) -> bool {
+    let Ok(mem) = GlobalAlloc(GMEM_MOVEABLE, bytes.len()) else {
+        return false;
+    };
+    let target = GlobalLock(mem);
+    if !target.is_null() {
+        ptr::copy_nonoverlapping(bytes.as_ptr(), target.cast(), bytes.len());
+        let _ = GlobalUnlock(mem);
+        if SetClipboardData(format, Some(HANDLE(mem.0))).is_ok() {
+            return true;
+        }
+    }
+    let _ = GlobalFree(Some(mem));
+    false
 }
 
 fn key_event(vk: VIRTUAL_KEY, up: bool) -> INPUT {
@@ -207,14 +217,31 @@ pub fn capture_selection_with_window() -> Option<CapturedSelection> {
 
 /// Replaces text in target window: restores target window focus, normalizes CRLF,
 /// pastes via Ctrl+V.
-pub fn replace_selection_in_target(target_hwnd: HWND, new_text: &str) -> bool {
+pub fn replace_selection_in_target(target_hwnd: HWND, new_text: &str, structure: bool) -> bool {
+    let owner = unsafe { GetActiveWindow() };
+    let owner = (!owner.0.is_null()).then_some(owner);
+    let rich = structure
+        .then(|| crate::rich_text::render(new_text))
+        .flatten();
     if !focus_target(target_hwnd) {
         return false;
     }
-    let normalized = new_text.replace("\r\n", "\n").replace('\n', "\r\n");
-    set_clipboard_text(&normalized)
-        && unsafe { GetForegroundWindow() } == target_hwnd
-        && send_control_key(VK_V, false)
+    let text = rich.as_ref().map_or(new_text, |rich| rich.plain.as_str());
+    let normalized = text.replace("\r\n", "\n").replace('\n', "\r\n");
+    if !write_clipboard(
+        &normalized,
+        rich.as_ref().map(|rich| rich.html.as_str()),
+        owner,
+    ) || unsafe { GetForegroundWindow() } != target_hwnd
+    {
+        return false;
+    }
+    if rich.is_some() {
+        if let Some(pasted) = crate::word::paste_html(target_hwnd) {
+            return pasted;
+        }
+    }
+    send_control_key(VK_V, false)
 }
 
 pub fn undo_in_target(target_hwnd: HWND) -> bool {

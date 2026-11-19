@@ -10,12 +10,14 @@ mod history;
 mod hotkey;
 mod hud;
 mod icon;
+mod rich_text;
 mod stats;
 mod store;
 mod studio;
 mod theme;
 mod tray;
 mod updater;
+mod word;
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};

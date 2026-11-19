@@ -11,10 +11,14 @@ use eframe::egui::{
 };
 use std::sync::mpsc::{channel, Receiver};
 use std::time::Duration;
-use windows::Win32::Foundation::{HWND, POINT};
+use windows::Win32::Foundation::{HWND, POINT, RECT};
 use windows::Win32::Graphics::Gdi::{
     GetMonitorInfoW, MonitorFromPoint, MONITORINFO, MONITOR_DEFAULTTONEAREST,
 };
+use windows::Win32::UI::Input::KeyboardAndMouse::{
+    GetAsyncKeyState, VIRTUAL_KEY, VK_ESCAPE, VK_LBUTTON, VK_MBUTTON, VK_RBUTTON,
+};
+use windows::Win32::UI::WindowsAndMessaging::{GetCursorPos, GetWindowRect};
 
 pub const WIDTH: f32 = 480.0;
 
@@ -69,6 +73,8 @@ pub struct Hud {
     pub position: Pos2,
     worker_rx: Option<Receiver<HudWorkerMsg>>,
     seen_focus: bool,
+    window_handle: isize,
+    dragging: bool,
     outside_input_down: bool,
     focus_requested: bool,
     awaiting_paste_blur: bool,
@@ -77,13 +83,14 @@ pub struct Hud {
     pub demo_sticky: bool,
 }
 
-fn outside_input_down() -> bool {
-    use windows::Win32::UI::Input::KeyboardAndMouse::{
-        GetAsyncKeyState, VK_ESCAPE, VK_LBUTTON, VK_MBUTTON, VK_RBUTTON,
-    };
-    [VK_LBUTTON, VK_RBUTTON, VK_MBUTTON, VK_ESCAPE]
-        .iter()
-        .any(|key| unsafe { GetAsyncKeyState(i32::from(key.0)) < 0 })
+fn key_down(key: VIRTUAL_KEY) -> bool {
+    unsafe { GetAsyncKeyState(i32::from(key.0)) < 0 }
+}
+
+fn mouse_button_down() -> bool {
+    [VK_LBUTTON, VK_RBUTTON, VK_MBUTTON]
+        .into_iter()
+        .any(key_down)
 }
 
 /// The effective output language for a run: the custom language whenever the
@@ -152,6 +159,8 @@ impl Hud {
             position: Pos2::new(200.0, 200.0),
             worker_rx: None,
             seen_focus: false,
+            window_handle: 0,
+            dragging: false,
             outside_input_down: false,
             focus_requested: false,
             awaiting_paste_blur: false,
@@ -172,7 +181,9 @@ impl Hud {
         self.custom_rewrite_input.clear();
         self.error_message = None;
         self.seen_focus = false;
-        self.outside_input_down = outside_input_down();
+        self.window_handle = 0;
+        self.dragging = false;
+        self.outside_input_down = key_down(VK_ESCAPE) || mouse_button_down();
         self.focus_requested = false;
         self.awaiting_paste_blur = false;
         // Reserve room for the expanded palette and an inline error.
@@ -201,6 +212,7 @@ impl Hud {
         // Winit creates the window hidden so its initial position and the
         // first GL frame can be ready before DWM presents the palette.
         if let Ok(hwnd) = unsafe { FindWindowW(PCWSTR::null(), w!("Refined HUD")) } {
+            self.window_handle = hwnd.0 as isize;
             let disable_transitions: i32 = 1;
             unsafe {
                 let _ = DwmSetWindowAttribute(
@@ -233,6 +245,15 @@ impl Hud {
         ctx.request_repaint_of(egui::ViewportId::ROOT);
     }
 
+    fn pointer_over_window(&self) -> bool {
+        let mut point = POINT::default();
+        let mut rect = RECT::default();
+        let hwnd = HWND(self.window_handle as *mut std::ffi::c_void);
+        (unsafe { GetCursorPos(&mut point).is_ok() && GetWindowRect(hwnd, &mut rect).is_ok() })
+            && (rect.left..rect.right).contains(&point.x)
+            && (rect.top..rect.bottom).contains(&point.y)
+    }
+
     pub fn dismiss_requested(&mut self, ui: &Ui) -> bool {
         if ui.input(|i| i.viewport().close_requested()) {
             return true;
@@ -240,11 +261,24 @@ impl Hud {
         if self.demo_sticky {
             return false;
         }
-        let input_down = outside_input_down();
+        if self.dragging {
+            if key_down(VK_LBUTTON) {
+                ui.ctx().request_repaint_after(Duration::from_millis(24));
+                return false;
+            }
+            self.dragging = false;
+            self.seen_focus = false;
+        }
+        let mouse_down = mouse_button_down();
+        let click_inside = mouse_down && self.pointer_over_window();
+        let input_down = key_down(VK_ESCAPE) || (mouse_down && !click_inside);
         let pressed = input_down && !self.outside_input_down;
         self.outside_input_down = input_down;
         if ui.input(|i| i.focused) {
             self.seen_focus = !self.awaiting_paste_blur;
+            return false;
+        }
+        if click_inside {
             return false;
         }
         if std::mem::take(&mut self.awaiting_paste_blur) {
@@ -376,8 +410,12 @@ impl Hud {
             } => {
                 let hwnd = HWND(self.target_hwnd as *mut std::ffi::c_void);
                 let changed = self.original_text != refined_text;
-                let applied =
-                    changed && crate::clipboard::replace_selection_in_target(hwnd, &refined_text);
+                let applied = changed
+                    && crate::clipboard::replace_selection_in_target(
+                        hwnd,
+                        &refined_text,
+                        action_id == "structure",
+                    );
                 if changed && self.target_hwnd != 0 {
                     self.awaiting_paste_blur = true;
                     self.focus_requested = true;
@@ -552,7 +590,7 @@ impl Hud {
         // Quiet header: brand left; language, Studio, close as icon-only
         // controls right. No word count, no separator - the palette stays
         // minimal; the diff screen already shows the word delta.
-        ui.horizontal(|ui| {
+        let header = ui.horizontal(|ui| {
             ui.label(
                 RichText::new("Refined")
                     .font(FontId::proportional(14.0))
@@ -629,10 +667,31 @@ impl Hud {
                             }
                         })
                         .response
-                        .on_hover_text(format!("Language: {lang_label}"));
-                });
-            });
+                        .on_hover_text(format!("Language: {lang_label}"))
+                        .rect
+                        .left()
+                })
+                .inner
+            })
+            .inner
         });
+
+        let row = header.response.rect;
+        let drag_area = egui::Rect::from_min_max(
+            row.min,
+            Pos2::new((header.inner - 4.0).max(row.left()), row.bottom()),
+        );
+        let drag = ui
+            .interact(
+                drag_area,
+                ui.scope_id().with("hud_header_drag"),
+                Sense::drag(),
+            )
+            .on_hover_cursor(egui::CursorIcon::Grab);
+        if drag.drag_started_by(egui::PointerButton::Primary) {
+            self.dragging = true;
+            ctx.send_viewport_cmd(egui::ViewportCommand::StartDrag);
+        }
 
         if *selected_language == "custom" && !matches!(self.state, HudState::DiffView { .. }) {
             ui.horizontal(|ui| {
