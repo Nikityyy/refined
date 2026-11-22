@@ -12,13 +12,25 @@ use eframe::egui::{self, Ui, ViewportCommand, ViewportId};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::Receiver;
 use std::sync::{Arc, Mutex};
+#[cfg(windows)]
 use windows::core::{w, PCWSTR};
+#[cfg(windows)]
 use windows::Win32::Foundation::{CloseHandle, HANDLE, HWND, WAIT_OBJECT_0};
+#[cfg(windows)]
 use windows::Win32::Graphics::Dwm::{DwmSetWindowAttribute, DWMWA_CLOAK};
+#[cfg(windows)]
 use windows::Win32::System::Threading::{
     OpenEventW, SetEvent, WaitForSingleObject, INFINITE, SYNCHRONIZATION_SYNCHRONIZE,
 };
+#[cfg(windows)]
 use windows::Win32::UI::WindowsAndMessaging::{FindWindowW, IsWindowVisible};
+
+/// Wakes the running app when a second launch asks for Studio.
+#[cfg(windows)]
+pub type RestoreSignal = HANDLE;
+/// Receives "show" and "trigger" from later launches.
+#[cfg(target_os = "linux")]
+pub type RestoreSignal = std::os::unix::net::UnixListener;
 
 /// Demo / capture options. Compiled out of shipped binaries - the fields
 /// and the argument parser only exist in `--features demo` builds.
@@ -61,11 +73,19 @@ pub struct RefinedApp {
     pub hotkey_rx: Receiver<TriggerPayload>,
     pub hotkey_failed: Arc<AtomicBool>,
     pub quitting: Arc<AtomicBool>,
+    #[cfg(windows)]
     pub restore_event: HANDLE,
     hotkey_listener: Option<std::thread::JoinHandle<()>>,
     restore_listener: Option<std::thread::JoinHandle<()>>,
     root_window_hidden: bool,
+    #[cfg(windows)]
     root_hwnd: HWND,
+    /// eframe shows the root window after its first painted frame, even
+    /// when it starts hidden. Linux hides it again after that frame.
+    #[cfg(not(windows))]
+    root_painted: bool,
+    #[cfg(not(windows))]
+    hide_after_first_paint: bool,
     fonts_loaded: bool,
     /// Live keybind shared with the hotkey thread; bumped via
     /// `hotkey_version` after a Settings change to trigger re-registration.
@@ -83,7 +103,7 @@ impl RefinedApp {
         cc: &eframe::CreationContext,
         store: Arc<Mutex<Store>>,
         hotkey_failed: Arc<AtomicBool>,
-        restore_event: HANDLE,
+        restore_event: RestoreSignal,
         quitting: Arc<AtomicBool>,
         initially_visible: bool,
         #[cfg_attr(not(feature = "demo"), allow(unused_variables))] demo_opts: DemoOptions,
@@ -96,6 +116,8 @@ impl RefinedApp {
         let hotkey = Arc::new(Mutex::new(hotkey_cfg.clone()));
         let hotkey_version = Arc::new(AtomicU64::new(1));
         let (hotkey_tx, hotkey_rx) = std::sync::mpsc::channel();
+        #[cfg(target_os = "linux")]
+        let trigger_tx = hotkey_tx.clone();
         let hotkey_listener = crate::hotkey::start_hotkey_listener(
             cc.egui_ctx.clone(),
             hotkey_tx,
@@ -124,8 +146,21 @@ impl RefinedApp {
         }
 
         let restore_ctx = cc.egui_ctx.clone();
+        #[cfg(windows)]
         let restore_quitting = quitting.clone();
         let restore_studio_open = studio_open.clone();
+        #[cfg(target_os = "linux")]
+        let restore_listener = std::thread::spawn(move || {
+            crate::instance_linux::listen(restore_event, |message| {
+                if message == crate::instance_linux::TRIGGER {
+                    crate::hotkey::trigger(&restore_ctx, &trigger_tx);
+                } else if message == crate::instance_linux::SHOW {
+                    restore_studio_open.store(true, Ordering::Relaxed);
+                    restore_ctx.request_repaint_of(ViewportId::ROOT);
+                }
+            });
+        });
+        #[cfg(windows)]
         let restore_listener = std::thread::spawn(move || {
             let Ok(event) =
                 (unsafe { OpenEventW(SYNCHRONIZATION_SYNCHRONIZE, false, crate::RESTORE_EVENT) })
@@ -153,10 +188,18 @@ impl RefinedApp {
         #[cfg(feature = "demo")]
         let demo_run_action = demo_opts.run.clone();
 
+        #[cfg(windows)]
         let root_hwnd =
             unsafe { FindWindowW(PCWSTR::null(), w!("Refined Studio")) }.unwrap_or_default();
+        #[cfg(windows)]
         if !initially_visible {
             set_studio_cloaked(root_hwnd, true);
+        }
+        // Get the first paint, and the window it maps, over with at startup.
+        #[cfg(not(windows))]
+        if !initially_visible {
+            cc.egui_ctx
+                .send_viewport_cmd(ViewportCommand::RequestPaintWhileHidden);
         }
 
         Self {
@@ -181,11 +224,17 @@ impl RefinedApp {
             hotkey_rx,
             hotkey_failed,
             quitting,
+            #[cfg(windows)]
             restore_event,
             hotkey_listener: Some(hotkey_listener),
             restore_listener: Some(restore_listener),
             root_window_hidden: !initially_visible,
+            #[cfg(windows)]
             root_hwnd,
+            #[cfg(not(windows))]
+            root_painted: false,
+            #[cfg(not(windows))]
+            hide_after_first_paint: !initially_visible,
             fonts_loaded: false,
             hotkey,
             hotkey_version,
@@ -198,6 +247,7 @@ impl RefinedApp {
     }
 }
 
+#[cfg(windows)]
 fn set_studio_cloaked(hwnd: HWND, hidden: bool) {
     let cloak = i32::from(hidden);
     unsafe {
@@ -219,9 +269,12 @@ impl eframe::App for RefinedApp {
                 s.save_settings();
             }
         }
+        #[cfg(windows)]
         unsafe {
             let _ = SetEvent(self.restore_event);
         }
+        #[cfg(target_os = "linux")]
+        crate::instance_linux::release();
         if let Some(listener) = self.restore_listener.take() {
             let _ = listener.join();
         }
@@ -241,18 +294,25 @@ impl eframe::App for RefinedApp {
 
         let studio_hidden = !self.studio_open.load(Ordering::Relaxed);
         if studio_hidden {
-            if !self.root_window_hidden || unsafe { IsWindowVisible(self.root_hwnd).as_bool() } {
+            #[cfg(windows)]
+            let still_shown = unsafe { IsWindowVisible(self.root_hwnd).as_bool() };
+            #[cfg(not(windows))]
+            let still_shown =
+                self.root_painted && std::mem::take(&mut self.hide_after_first_paint);
+            if !self.root_window_hidden || still_shown {
                 ctx.send_viewport_cmd(ViewportCommand::Visible(false));
                 // eframe can show the root after the first painted frame.
                 ctx.request_repaint();
             }
         } else if self.root_window_hidden {
+            #[cfg(windows)]
             set_studio_cloaked(self.root_hwnd, false);
             tray::show_studio_window(ctx);
         }
         self.root_window_hidden = studio_hidden;
 
         if let Some(payload) = self.hotkey_rx.try_iter().last() {
+            crate::groq::warm_up();
             self.hud.lock().unwrap().open(
                 payload.selected_text,
                 payload.cursor_x,
@@ -296,6 +356,10 @@ impl eframe::App for RefinedApp {
 
     fn ui(&mut self, ui: &mut Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
+        #[cfg(not(windows))]
+        if !std::mem::replace(&mut self.root_painted, true) && self.hide_after_first_paint {
+            ctx.request_repaint();
+        }
 
         // Demo mode (`refined --demo`): open the HUD once with sample text so
         // the UI can be inspected without a text selection in another app.

@@ -29,45 +29,83 @@ pub struct CapturedSelection {
     pub target_hwnd: HWND,
 }
 
+/// Reads the copied text, with `<sub>` and `<sup>` tags restored from the
+/// HTML or RTF copy of the same selection (Word, browsers, Acrobat).
+fn get_selection_text() -> Option<String> {
+    unsafe {
+        let html_format = RegisterClipboardFormatW(w!("HTML Format"));
+        let rtf_format = RegisterClipboardFormatW(w!("Rich Text Format"));
+        if !open_clipboard() {
+            return None;
+        }
+        let text = read_unicode_text();
+        let html = (html_format != 0)
+            .then(|| read_bytes(html_format))
+            .flatten()
+            .map(|bytes| String::from_utf8_lossy(&bytes).into_owned());
+        let rtf = (rtf_format != 0).then(|| read_bytes(rtf_format)).flatten();
+        let _ = CloseClipboard();
+        let text = text?;
+        Some(crate::rich_text::mark_scripts(&text, html.as_deref(), rtf.as_deref()).unwrap_or(text))
+    }
+}
+
+/// Copies one clipboard format while the clipboard is open.
+unsafe fn read_bytes(format: u32) -> Option<Vec<u8>> {
+    if IsClipboardFormatAvailable(format).is_err() {
+        return None;
+    }
+    let hmem = HGLOBAL(GetClipboardData(format).ok()?.0);
+    let ptr = GlobalLock(hmem) as *const u8;
+    if ptr.is_null() {
+        return None;
+    }
+    let bytes = std::slice::from_raw_parts(ptr, GlobalSize(hmem));
+    let end = bytes.iter().position(|byte| *byte == 0).unwrap_or(bytes.len());
+    let bytes = bytes[..end].to_vec();
+    let _ = GlobalUnlock(hmem);
+    Some(bytes)
+}
+
+/// Reads CF_UNICODETEXT while the clipboard is open.
+unsafe fn read_unicode_text() -> Option<String> {
+    if IsClipboardFormatAvailable(CF_UNICODETEXT).is_err() {
+        return None;
+    }
+    let hmem = HGLOBAL(GetClipboardData(CF_UNICODETEXT).ok()?.0);
+    let ptr = GlobalLock(hmem) as *const u16;
+    if ptr.is_null() {
+        return None;
+    }
+    let max_words = GlobalSize(hmem) / std::mem::size_of::<u16>();
+    let mut len = 0;
+    while len < max_words && *ptr.add(len) != 0 {
+        len += 1;
+    }
+    let text = String::from_utf16_lossy(std::slice::from_raw_parts(ptr, len));
+    let _ = GlobalUnlock(hmem);
+    Some(text)
+}
+
 /// Reads Unicode text currently in the Windows clipboard with retries and bounds checks.
 pub fn get_clipboard_text() -> Option<String> {
     unsafe {
-        let mut opened = false;
-        for _ in 0..5 {
-            if OpenClipboard(None).is_ok() {
-                opened = true;
-                break;
-            }
-            sleep(Duration::from_millis(8));
-        }
-        if !opened {
-            return None;
-        }
-
-        let result = (|| {
-            if IsClipboardFormatAvailable(CF_UNICODETEXT).is_err() {
-                return None;
-            }
-            let handle = GetClipboardData(CF_UNICODETEXT).ok()?;
-            let hmem = HGLOBAL(handle.0);
-            let ptr = GlobalLock(hmem) as *const u16;
-            if ptr.is_null() {
-                return None;
-            }
-            let max_words = GlobalSize(hmem) / std::mem::size_of::<u16>();
-            let mut len = 0;
-            while len < max_words && *ptr.add(len) != 0 {
-                len += 1;
-            }
-            let slice = std::slice::from_raw_parts(ptr, len);
-            let text = String::from_utf16_lossy(slice);
-            let _ = GlobalUnlock(hmem);
-            Some(text)
-        })();
-
-        let _ = CloseClipboard();
-        result
+        open_clipboard().then(|| {
+            let text = read_unicode_text();
+            let _ = CloseClipboard();
+            text
+        })?
     }
+}
+
+unsafe fn open_clipboard() -> bool {
+    for _ in 0..5 {
+        if OpenClipboard(None).is_ok() {
+            return true;
+        }
+        sleep(Duration::from_millis(8));
+    }
+    false
 }
 
 /// Sets Unicode text into the Windows clipboard safely without leaking memory.
@@ -203,7 +241,7 @@ pub fn capture_selection_with_window() -> Option<CapturedSelection> {
     }
 
     if changed && unsafe { GetForegroundWindow() } == target_hwnd {
-        if let Some(text) = get_clipboard_text() {
+        if let Some(text) = get_selection_text() {
             let trimmed = text.trim();
             if !trimmed.is_empty() {
                 return Some(CapturedSelection { text, target_hwnd });

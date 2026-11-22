@@ -1,8 +1,8 @@
 [package]
 name = "refined"
-version = "0.3.4"
+version = "0.4.0"
 edition = "2021"
-description = "AI text refiner for Windows: select text anywhere, press Ctrl+Shift+X, get polished text back in place."
+description = "AI text refiner for Windows and Linux: select text anywhere, press Ctrl+Shift+X, get polished text back in place."
 license = "MIT"
 
 [features]
@@ -20,7 +20,7 @@ ureq = { version = "3", default-features = false, features = ["json", "native-tl
 sha2 = "0.10"
 pulldown-cmark = { version = "0.13", default-features = false, features = ["html"] }
 
-[dependencies.windows]
+[target.'cfg(windows)'.dependencies.windows]
 version = "0.62"
 features = [
     "Win32_Foundation",
@@ -40,6 +40,14 @@ features = [
     "Win32_System_DataExchange",
     "Win32_System_Memory",
 ]
+
+[target.'cfg(target_os = "linux")'.dependencies]
+# Linux has no Segoe fonts; egui's bundled fonts cover text and icons.
+eframe = { version = "0.37", default-features = false, features = ["glow", "clipboard", "default_fonts", "x11", "wayland"] }
+arboard = { version = "3.7", default-features = false }
+x11rb = { version = "0.13", features = ["xtest"] }
+gtk = "0.18"
+libloading = "0.8"
 
 [build-dependencies]
 winresource = "0.1.34"

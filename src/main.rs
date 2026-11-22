@@ -2,14 +2,19 @@
 
 mod actions;
 mod app;
+#[cfg_attr(target_os = "linux", path = "autostart_linux.rs")]
 mod autostart;
+#[cfg_attr(target_os = "linux", path = "clipboard_linux.rs")]
 mod clipboard;
 mod diff;
 mod groq;
 mod history;
+#[cfg_attr(target_os = "linux", path = "hotkey_linux.rs")]
 mod hotkey;
 mod hud;
 mod icon;
+#[cfg(target_os = "linux")]
+mod instance_linux;
 mod rich_text;
 mod stats;
 mod store;
@@ -17,15 +22,23 @@ mod studio;
 mod theme;
 mod tray;
 mod updater;
+#[cfg(windows)]
 mod word;
+#[cfg(target_os = "linux")]
+mod x11;
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
+#[cfg(windows)]
 use windows::core::{w, PCWSTR};
+#[cfg(windows)]
 use windows::Win32::Foundation::{CloseHandle, GetLastError, ERROR_ALREADY_EXISTS};
+#[cfg(windows)]
 use windows::Win32::System::Threading::{CreateEventW, CreateMutexW, ReleaseMutex, SetEvent};
 
+#[cfg(windows)]
 pub const INSTANCE_MUTEX: PCWSTR = w!("Local\\Refined");
+#[cfg(windows)]
 pub const RESTORE_EVENT: PCWSTR = w!("Local\\Refined.Restore");
 
 // Demo / capture / benchmark scaffolding, kept out of shipped binaries via
@@ -172,11 +185,9 @@ fn main() -> eframe::Result {
     // Panics in a GUI-subsystem app vanish silently; log them so any crash
     // the user reports can be diagnosed from a file.
     std::panic::set_hook(Box::new(|info| {
-        let dir = std::env::var("LOCALAPPDATA")
-            .map(|d| format!("{d}\\Refined"))
-            .unwrap_or_else(|_| ".".to_string());
+        let dir = store::data_dir();
         let _ = std::fs::create_dir_all(&dir);
-        let _ = std::fs::write(format!("{dir}\\panic.log"), format!("{info}\n"));
+        let _ = std::fs::write(dir.join("panic.log"), format!("{info}\n"));
     }));
 
     if !updater::wait_for_previous_process() {
@@ -184,10 +195,13 @@ fn main() -> eframe::Result {
     }
 
     // Single instance mutex and restore event
+    #[cfg(windows)]
     let restore_event =
         unsafe { CreateEventW(None, false, false, RESTORE_EVENT) }.expect("restore event");
+    #[cfg(windows)]
     let instance = unsafe { CreateMutexW(None, true, INSTANCE_MUTEX) }.expect("instance mutex");
 
+    #[cfg(windows)]
     if unsafe { GetLastError() } == ERROR_ALREADY_EXISTS {
         unsafe {
             let _ = SetEvent(restore_event);
@@ -196,6 +210,25 @@ fn main() -> eframe::Result {
         }
         return Ok(());
     }
+
+    #[cfg(target_os = "linux")]
+    let trigger_only = std::env::args().any(|a| a == "--trigger");
+    #[cfg(target_os = "linux")]
+    let Some(instance) = instance_linux::claim(if trigger_only {
+        instance_linux::TRIGGER
+    } else {
+        instance_linux::SHOW
+    }) else {
+        return Ok(());
+    };
+    #[cfg(target_os = "linux")]
+    if trigger_only {
+        // Nothing was running to open the palette in.
+        instance_linux::release();
+        return Ok(());
+    }
+    #[cfg(target_os = "linux")]
+    let restore_event = instance;
 
     // Refresh Windows autostart entry if enabled
     autostart::refresh();
@@ -264,6 +297,7 @@ fn main() -> eframe::Result {
     );
 
     quitting.store(true, Ordering::Relaxed);
+    #[cfg(windows)]
     unsafe {
         let _ = CloseHandle(restore_event);
         let _ = ReleaseMutex(instance);

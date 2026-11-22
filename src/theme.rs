@@ -14,6 +14,8 @@ use eframe::egui::{
 /// Monochrome UI icon glyphs from Segoe MDL2 Assets (Windows system font).
 /// One icon set, one optical weight - the app's only icon family. Every
 /// constant here must have a call site; the compiler enforces it.
+/// Segoe MDL2 Assets glyphs on Windows.
+#[cfg(windows)]
 pub mod icons {
     pub const TRASH: &str = "\u{E74D}";
     pub const SEARCH: &str = "\u{E721}";
@@ -36,6 +38,48 @@ pub mod icons {
     pub const DOWNLOAD: &str = "\u{E896}";
     pub const SAVE: &str = "\u{E74E}";
     pub const EYE: &str = "\u{E7B3}";
+}
+
+/// Icons offered for custom actions.
+pub const ACTION_ICONS: [&str; 12] = [
+    icons::EDIT,
+    icons::BULLETED_LIST,
+    icons::CHEVRON_DOWN,
+    icons::CHEVRON_UP,
+    icons::CLEAR,
+    icons::REPAIR,
+    icons::WORLD,
+    icons::SEARCH,
+    icons::CHECK_MARK,
+    icons::COPY,
+    icons::EYE,
+    icons::WARNING,
+];
+
+/// Glyphs of egui's bundled monochrome icon font on Linux.
+#[cfg(not(windows))]
+pub mod icons {
+    pub const TRASH: &str = "\u{1F5D1}";
+    pub const SEARCH: &str = "\u{1F50D}";
+    pub const SETTINGS: &str = "\u{2699}";
+    pub const WORLD: &str = "\u{1F310}";
+    pub const CLOSE: &str = "\u{1F5D9}";
+    pub const WARNING: &str = "\u{26A0}";
+    pub const CHECK_MARK: &str = "\u{2714}";
+    pub const EDIT: &str = "\u{270F}";
+    pub const COPY: &str = "\u{1F5D0}";
+    pub const REFRESH: &str = "\u{27F3}";
+    pub const CHEVRON_DOWN: &str = "\u{23F7}";
+    pub const CHEVRON_UP: &str = "\u{23F6}";
+    pub const BULLETED_LIST: &str = "\u{2630}";
+    pub const CLEAR: &str = "\u{1F5DB}";
+    pub const REPAIR: &str = "\u{1F527}";
+    pub const ADD: &str = "+";
+    pub const UP: &str = "\u{23F6}";
+    pub const DOWN: &str = "\u{23F7}";
+    pub const DOWNLOAD: &str = "\u{2B8B}";
+    pub const SAVE: &str = "\u{1F4BE}";
+    pub const EYE: &str = "\u{1F441}";
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -188,6 +232,41 @@ pub fn configure_egui_theme(ctx: &egui::Context, theme: &SpectrumTheme) {
 }
 
 /// Sets up Segoe UI + Segoe UI Symbol typography from Windows system fonts.
+/// Linux text uses the desktop's sans-serif font when fontconfig finds one
+/// that covers sub- and superscript letters, then egui's bundled font. Icons
+/// come from a subset of emoji-icon-font (see assets/refined-icons-LICENSE.txt).
+#[cfg(not(windows))]
+pub fn setup_custom_fonts(ctx: &egui::Context) {
+    let mut fonts = egui::FontDefinitions::default();
+    let Some(family) = fonts.families.get_mut(&egui::FontFamily::Proportional) else {
+        return;
+    };
+    let system = std::process::Command::new("fc-match")
+        .args(["--format=%{index}:%{file}", "sans-serif:charset=2099"])
+        .output()
+        .ok()
+        .and_then(|output| String::from_utf8(output.stdout).ok())
+        .and_then(|found| {
+            let (index, file) = found.split_once(':')?;
+            Some((index.parse().ok()?, std::fs::read(file).ok()?))
+        });
+    if let Some((index, bytes)) = system {
+        family.insert(0, "SystemSans".to_owned());
+        let mut data = egui::FontData::from_owned(bytes);
+        data.index = index;
+        fonts.font_data.insert("SystemSans".to_owned(), std::sync::Arc::new(data));
+    }
+    family.push("RefinedIcons".to_owned());
+    fonts.font_data.insert(
+        "RefinedIcons".to_owned(),
+        std::sync::Arc::new(egui::FontData::from_static(include_bytes!(
+            "../assets/refined-icons.ttf"
+        ))),
+    );
+    ctx.set_fonts(fonts);
+}
+
+#[cfg(windows)]
 pub fn setup_custom_fonts(ctx: &egui::Context) {
     let mut fonts = egui::FontDefinitions::default();
     let font_dir = std::path::Path::new("C:\\Windows\\Fonts");
