@@ -240,7 +240,7 @@ impl Studio {
                 ui.horizontal(|ui| {
                     ui.label(
                         RichText::new(icons::DOWNLOAD)
-                            .font(FontId::proportional(13.0))
+                            .font(FontId::proportional(14.0))
                             .color(theme.accent_badge_text),
                     );
                     ui.label(
@@ -285,7 +285,7 @@ impl Studio {
             );
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 let busy = matches!(self.update_state, Some(UpdateState::Checking | UpdateState::Ready { .. }));
-                if ui.add_enabled(!busy, egui::Button::new(RichText::new("Check again").font(FontId::proportional(12.0)).color(Color32::WHITE)).fill(theme.accent).stroke(Stroke::NONE).corner_radius(CornerRadius::same(4))).clicked() {
+                if ui.add_enabled_ui(!busy, |ui| spectrum_button_compact(ui, Some(icons::REFRESH), "Check again", false, theme)).inner.clicked() {
                     self.check_for_updates(ui.ctx());
                 }
             });
@@ -337,7 +337,7 @@ impl Studio {
             for (tab, label, shortcut) in tabs {
                 let active = self.current_tab == tab;
                 let response = ui.add(
-                    egui::Button::new(RichText::new(label).size(13.0).color(
+                    egui::Button::new(RichText::new(label).size(14.0).color(
                         if active { theme.text_primary } else { theme.text_secondary }
                     ))
                     .frame_when_inactive(false)
@@ -582,7 +582,7 @@ impl Studio {
                             // Content preview
                             if let Some(chunks) = diff {
                                 ui.label(RichText::new("Original text").font(FontId::proportional(12.0)).color(theme.text_secondary));
-                                ui.label(RichText::new(crate::rich_text::readable(&entry.original_text)).font(FontId::proportional(13.0)).color(theme.text_primary));
+                                ui.label(RichText::new(crate::rich_text::readable(&entry.original_text)).font(FontId::proportional(14.0)).color(theme.text_primary));
                                 ui.add_space(6.0);
 
                                 ui.label(RichText::new("Changes").font(FontId::proportional(12.0)).color(theme.accent).strong());
@@ -598,7 +598,7 @@ impl Studio {
                                 // Char-boundary-safe preview: raw byte slicing
                                 // would panic on multi-byte UTF-8 (umlauts, CJK).
                                 let preview = truncate_chars(&crate::rich_text::readable(&entry.refined_text), 140);
-                                ui.label(RichText::new(preview).font(FontId::proportional(13.0)).color(theme.text_primary));
+                                ui.label(RichText::new(preview).font(FontId::proportional(14.0)).color(theme.text_primary));
                             }
                         });
                 }
@@ -1117,7 +1117,7 @@ impl Studio {
                                     if ui.add_enabled(
                                         idx > 0 && idx < movable_count,
                                         egui::Button::new(
-                                            RichText::new(icons::UP)
+                                            RichText::new(icons::CHEVRON_UP)
                                                 .font(FontId::proportional(12.0))
                                                 .color(theme.text_primary),
                                         )
@@ -1132,7 +1132,7 @@ impl Studio {
                                     if ui.add_enabled(
                                         idx + 1 < movable_count,
                                         egui::Button::new(
-                                            RichText::new(icons::DOWN)
+                                            RichText::new(icons::CHEVRON_DOWN)
                                                 .font(FontId::proportional(12.0))
                                                 .color(theme.text_primary),
                                         )
@@ -1552,7 +1552,7 @@ impl Studio {
                     // Theme selector: Spectrum segmented control - a quiet pill
                     // track with a filled active segment (no raw accent fill).
                     ui.horizontal(|ui| {
-                        ui.label(RichText::new("Theme:").font(FontId::proportional(12.0)).color(theme.text_primary));
+                        ui.label(RichText::new("Theme").font(FontId::proportional(12.0)).color(theme.text_primary));
                         let is_dark = theme.is_dark;
 
                         let seg_w = 220.0;
@@ -1640,12 +1640,28 @@ impl Studio {
                     });
 
                     ui.add_space(10.0);
+                    ui.horizontal(|ui| {
+                        if spectrum_switch(ui, &mut store.settings.paste_copied_text, theme).changed() {
+                            self.mark_settings_dirty();
+                        }
+                        ui.add_space(8.0);
+                        ui.vertical(|ui| {
+                            ui.label(RichText::new("Paste results made from copied text").color(theme.text_primary));
+                            ui.label(
+                                RichText::new("With nothing selected, the shortcut uses your copied text. When on, the result is pasted at your cursor; when off, it replaces the copied text on the clipboard.")
+                                    .font(FontId::proportional(12.0))
+                                    .color(theme.text_secondary),
+                            );
+                        });
+                    });
+
+                    ui.add_space(10.0);
 
                     // Global shortcut picker. Changes apply instantly: the
                     // hotkey thread re-registers when it sees the new combo.
                     ui.label(
                         RichText::new("Shortcut")
-                            .font(FontId::proportional(13.0))
+                            .font(FontId::proportional(14.0))
                             .color(theme.text_primary)
                             .strong(),
                     );
@@ -1693,7 +1709,7 @@ impl Studio {
                     });
                     ui.add_space(4.0);
                     ui.label(
-                        RichText::new("Triggers only when text is actively selected. Applies instantly; no restart needed.")
+                        RichText::new("Works on selected text, or on copied text when nothing is selected. Changes apply right away.")
                             .font(FontId::proportional(12.0))
                             .color(theme.text_secondary),
                     );

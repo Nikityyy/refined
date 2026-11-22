@@ -315,7 +315,10 @@ impl eframe::App for RefinedApp {
             if payload.source != crate::hud::Source::Nothing {
                 crate::groq::warm_up();
             }
-            self.hud.lock().unwrap().open(
+            let paste_copied = self.store.lock().unwrap().settings.paste_copied_text;
+            let mut hud = self.hud.lock().unwrap();
+            hud.paste_copied = paste_copied;
+            hud.open(
                 payload.selected_text,
                 payload.source,
                 payload.cursor_x,

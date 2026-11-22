@@ -196,6 +196,11 @@ pub struct Hud {
     pub state: HudState,
     pub original_text: String,
     pub source: Source,
+    /// Paste a result made from copied text at the cursor (Settings).
+    pub paste_copied: bool,
+    /// Window height that fits the diff without empty space, measured in
+    /// the last frame, so a short diff gets a short window.
+    diff_fit_height: Option<f32>,
     pub target_hwnd: isize,
     pub selected_index: usize,
     pub custom_rewrite_input: String,
@@ -262,6 +267,8 @@ impl Hud {
             state: HudState::SelectingAction,
             original_text: String::new(),
             source: Source::Selection,
+            paste_copied: true,
+            diff_fit_height: None,
             target_hwnd: 0,
             selected_index: 0,
             custom_rewrite_input: String::new(),
@@ -284,6 +291,7 @@ impl Hud {
         self.worker_rx = None;
         self.original_text = text;
         self.source = source;
+        self.diff_fit_height = None;
         self.target_hwnd = target_hwnd;
         self.is_visible = true;
         self.presented = false;
@@ -388,7 +396,11 @@ impl Hud {
             return 200.0;
         }
         let action_rows = settings.actions.len().min(9);
-        (48.0 + action_rows as f32 * 37.0).max(274.0)
+        let palette = (48.0 + action_rows as f32 * 37.0).max(274.0);
+        if let (HudState::DiffView { .. }, Some(fit)) = (&self.state, self.diff_fit_height) {
+            return fit.min(palette).round();
+        }
+        palette
             + if settings.selected_language == "custom" {
                 32.0
             } else {
@@ -510,18 +522,22 @@ impl Hud {
                 language,
             } => {
                 let changed = self.original_text != refined_text;
-                let in_place = self.source == Source::Selection;
-                let applied = changed
-                    && in_place
+                let from_clipboard = self.source == Source::Clipboard;
+                // A selection is replaced only when the text changed. Text
+                // from the clipboard is pasted at the cursor even unchanged,
+                // since the document does not contain it yet.
+                let paste = if from_clipboard { self.paste_copied } else { changed };
+                let applied = paste
                     && crate::clipboard::replace_selection_in_target(
                         target(self.target_hwnd),
                         &refined_text,
                     );
-                // Without a selection there is nothing to replace, so the
-                // result takes the copied text's place on the clipboard.
-                let copied =
-                    changed && !in_place && crate::clipboard::copy_refinement(&refined_text);
-                if changed && in_place && self.target_hwnd != 0 {
+                // Otherwise the result takes the copied text's place on the
+                // clipboard, ready for Ctrl+V.
+                let copied = !applied
+                    && from_clipboard
+                    && crate::clipboard::copy_refinement(&refined_text);
+                if applied && self.target_hwnd != 0 {
                     self.awaiting_paste_blur = true;
                     self.focus_requested = true;
                     self.seen_focus = false;
@@ -709,7 +725,7 @@ impl Hud {
                     .add(
                         egui::Button::new(
                             RichText::new(icons::CLOSE)
-                                .font(FontId::proportional(13.0))
+                                .font(FontId::proportional(14.0))
                                 .color(theme.text_secondary),
                         )
                         // Quiet icon button: it must read as text, not as a
@@ -727,7 +743,7 @@ impl Hud {
                     .add(
                         egui::Button::new(
                             RichText::new(icons::SETTINGS)
-                                .font(FontId::proportional(13.0))
+                                .font(FontId::proportional(14.0))
                                 .color(theme.text_secondary),
                         )
                         .fill(Color32::TRANSPARENT)
@@ -758,7 +774,7 @@ impl Hud {
                     egui::ComboBox::from_id_salt("hud_language_select")
                         .selected_text(
                             RichText::new(icons::WORLD)
-                                .font(FontId::proportional(13.0))
+                                .font(FontId::proportional(14.0))
                                 .color(theme.text_secondary),
                         )
                         .width(36.0)
@@ -831,6 +847,7 @@ impl Hud {
         }
 
         let should_close = std::cell::Cell::new(false);
+        let mut diff_fit = None;
 
         if self.source == Source::Nothing {
             let combo = format!("{}+{}", settings.hotkey.modifier, settings.hotkey.key);
@@ -838,7 +855,7 @@ impl Hud {
                 ui.add_space(14.0);
                 ui.label(
                     RichText::new("Nothing to refine")
-                        .font(FontId::proportional(15.0))
+                        .font(FontId::proportional(16.0))
                         .color(theme.text_primary)
                         .strong(),
                 );
@@ -885,7 +902,11 @@ impl Hud {
                                 .color(theme.accent),
                         );
                         ui.label(
-                            RichText::new("Nothing selected, using your copied text")
+                            RichText::new(if self.paste_copied {
+                                "Using copied text · result pastes at your cursor"
+                            } else {
+                                "Using copied text · result goes to your clipboard"
+                            })
                                 .font(FontId::proportional(12.0))
                                 .color(theme.text_primary)
                                 .strong(),
@@ -983,7 +1004,7 @@ impl Hud {
                 let lang = resolved_language(selected_language, custom_language);
                 ui.label(
                     RichText::new(format!("{} {}", icons::EDIT, action.name))
-                        .font(FontId::proportional(13.0))
+                        .font(FontId::proportional(14.0))
                         .color(theme.accent)
                         .strong(),
                 );
@@ -1034,7 +1055,7 @@ impl Hud {
                     ui.add_space(8.0);
                     ui.label(
                         RichText::new(format!("Refining with {model_short}..."))
-                            .font(FontId::proportional(13.0))
+                            .font(FontId::proportional(14.0))
                             .color(theme.text_primary)
                             .strong(),
                     );
@@ -1066,7 +1087,9 @@ impl Hud {
                 applied,
                 copied,
             } => {
-                let status = if *applied || self.demo_sticky {
+                let status = if *applied && self.source == Source::Clipboard {
+                    format!("{action_name} pasted")
+                } else if *applied || self.demo_sticky {
                     format!("{action_name} applied")
                 } else if *copied {
                     format!("{action_name} copied")
@@ -1090,12 +1113,12 @@ impl Hud {
                         } else {
                             icons::COPY
                         })
-                        .font(FontId::proportional(15.0))
+                        .font(FontId::proportional(16.0))
                         .color(theme.diff_add_text),
                     );
                     ui.label(
                         RichText::new(status)
-                            .font(FontId::proportional(15.0))
+                            .font(FontId::proportional(16.0))
                             .color(theme.text_primary)
                             .strong(),
                     );
@@ -1113,7 +1136,9 @@ impl Hud {
                     .filter(|c| !matches!(c.kind, crate::diff::DiffKind::Equal))
                     .count();
                 let change_word = if changed == 1 { "change" } else { "changes" };
-                let placement = if *applied {
+                let placement = if *applied && self.source == Source::Clipboard {
+                    " · pasted at your cursor"
+                } else if *applied {
                     " · replaced in your text"
                 } else if *copied {
                     " · on your clipboard, paste with Ctrl+V"
@@ -1140,13 +1165,19 @@ impl Hud {
                     .corner_radius(CornerRadius::same(8))
                     .inner_margin(egui::Margin::same(12))
                     .show(ui, |ui| {
-                        egui::ScrollArea::vertical()
-                            .max_height((diff_height - 26.0).max(14.0))
+                        let max_height = (diff_height - 26.0).max(14.0);
+                        let shown = egui::ScrollArea::vertical()
+                            .max_height(max_height)
                             .auto_shrink([false, false])
                             .show(ui, |ui| {
                                 ui.set_width(ui.available_width());
                                 render_diff_view(ui, diff_chunks, theme);
                             });
+                        // Everything but the diff box keeps its size, so the
+                        // fitting window is this one minus the box's spare room.
+                        let wanted = shown.content_size.y.max(60.0);
+                        let window = ui.ctx().content_rect().height();
+                        diff_fit = Some(window - max_height + wanted);
                     });
 
                 ui.add_space(10.0);
@@ -1198,6 +1229,9 @@ impl Hud {
             }
         }
 
+        if diff_fit.is_some() {
+            self.diff_fit_height = diff_fit;
+        }
         if should_close.get() {
             self.close();
         }

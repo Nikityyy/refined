@@ -76,6 +76,14 @@ pub struct AppSettings {
     pub hotkey: HotkeyConfig,
     #[serde(default)]
     hotkey_default_migrated: bool,
+    /// With nothing selected, paste the result made from the copied text at
+    /// the cursor instead of only putting it on the clipboard.
+    #[serde(default = "enabled")]
+    pub paste_copied_text: bool,
+}
+
+fn enabled() -> bool {
+    true
 }
 
 impl AppSettings {
@@ -99,6 +107,7 @@ impl Default for AppSettings {
             theme_mode: ThemeMode::Dark,
             hotkey: HotkeyConfig::default(),
             hotkey_default_migrated: true,
+            paste_copied_text: true,
         }
     }
 }

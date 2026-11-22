@@ -35,17 +35,17 @@ pub fn default_actions() -> Vec<ActionItem> {
     [
         ("polish", "Polish", "Fix grammar and improve clarity.", icons::EDIT,
          "Fix grammar, punctuation, and wording. Keep the author's voice and all the original facts. Preserve the paragraph and list layout."),
-        ("condense", "Condense", "Keep the essentials and remove repetition.", icons::CHEVRON_DOWN,
+        ("condense", "Condense", "Keep the essentials and remove repetition.", icons::MINIMIZE,
          "Shorten the notes by cutting repetition and filler. Keep definitions, distinctions, numerical values, conditions, and exceptions that could matter on an exam."),
-        ("expand", "Expand", "Explain the idea with a short example.", icons::CHEVRON_UP,
+        ("expand", "Expand", "Explain the idea with a short example.", icons::MAXIMIZE,
          "Explain the reasoning behind the notes. When helpful, add one short, clearly labeled illustrative example consistent with the notes. Do not invent supporting facts, citations, or dates."),
         ("structure", "Structure", "Turn dense notes into a study outline.", icons::BULLETED_LIST,
          "Organize the passage using Markdown headings and either bullets or numbering for each list. Reuse the original wording as much as possible. Keep the full meaning of each sentence, every qualifier, and the exact terms used in the notes. Correct obvious misspellings, such as swapped letters, to the closest valid spelling in context. Keep the corrected word in the output; do not replace it with a synonym, a new label, or a paraphrase. If the intended spelling is uncertain, keep the word as written. Do not invent facts or dates."),
-        ("simplify", "Simplify", "Explain the same idea in plainer language.", icons::CLEAR,
+        ("simplify", "Simplify", "Explain the same idea in plainer language.", icons::TEXT,
          "Rewrite in shorter sentences with familiar words. Briefly define necessary technical terms in context. Keep direction, cause and effect, and exceptions intact."),
-        ("flashcards", "Flashcards", "Turn notes into questions for active recall.", icons::BULLETED_LIST,
+        ("flashcards", "Flashcards", "Turn notes into questions for active recall.", icons::CHECKLIST,
          "Replace the notes with only flashcard pairs. Use a Q: line and an A: line for each pair, with a blank line between pairs. Use one meaningful fact, formula, or relationship per card. Every answer must be supported directly by the notes. Do not repeat the source notes or add headings, commentary, or Markdown."),
-        ("rewrite_as", "Rewrite as...", "Give your own instructions for the rewrite.", icons::REPAIR,
+        ("rewrite_as", "Rewrite as...", "Give your own instructions for the rewrite.", icons::REPLACE,
          "Rewrite the text according to this instruction: {user_instruction}"),
     ]
     .into_iter()

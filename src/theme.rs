@@ -11,76 +11,51 @@ use eframe::egui::{
     Stroke, StrokeKind, TextFormat, Ui, Vec2, Visuals,
 };
 
-/// Monochrome UI icon glyphs from Segoe MDL2 Assets (Windows system font).
-/// One icon set, one optical weight - the app's only icon family. Every
+/// One icon set, one optical weight: the app's only icon family. Every
 /// constant here must have a call site; the compiler enforces it.
-/// Segoe MDL2 Assets glyphs on Windows.
-#[cfg(windows)]
+/// Adobe Spectrum 2 workflow icons, built into assets/refined-icons.ttf
+/// by assets/build-icons.py (codepoints U+F1000 onward, in its order).
 pub mod icons {
-    pub const TRASH: &str = "\u{E74D}";
-    pub const SEARCH: &str = "\u{E721}";
-    pub const SETTINGS: &str = "\u{E713}";
-    pub const WORLD: &str = "\u{E909}";
-    pub const CLOSE: &str = "\u{E711}";
-    pub const WARNING: &str = "\u{E7BA}";
-    pub const CHECK_MARK: &str = "\u{E73E}";
-    pub const EDIT: &str = "\u{E70F}";
-    pub const COPY: &str = "\u{E8C8}";
-    pub const REFRESH: &str = "\u{E72C}";
-    pub const CHEVRON_DOWN: &str = "\u{E96D}";
-    pub const CHEVRON_UP: &str = "\u{E96E}";
-    pub const BULLETED_LIST: &str = "\u{E8FD}";
-    pub const CLEAR: &str = "\u{E8E6}";
-    pub const REPAIR: &str = "\u{E90F}";
-    pub const ADD: &str = "\u{E710}";
-    pub const UP: &str = "\u{E70E}";
-    pub const DOWN: &str = "\u{E70D}";
-    pub const DOWNLOAD: &str = "\u{E896}";
-    pub const SAVE: &str = "\u{E74E}";
-    pub const EYE: &str = "\u{E7B3}";
+    pub const TRASH: &str = "\u{F1000}";
+    pub const SEARCH: &str = "\u{F1001}";
+    pub const SETTINGS: &str = "\u{F1002}";
+    pub const WORLD: &str = "\u{F1003}";
+    pub const CLOSE: &str = "\u{F1004}";
+    pub const WARNING: &str = "\u{F1005}";
+    pub const CHECK_MARK: &str = "\u{F1006}";
+    pub const EDIT: &str = "\u{F1007}";
+    pub const COPY: &str = "\u{F1008}";
+    pub const REFRESH: &str = "\u{F1009}";
+    pub const CHEVRON_DOWN: &str = "\u{F100A}";
+    pub const CHEVRON_UP: &str = "\u{F100B}";
+    pub const BULLETED_LIST: &str = "\u{F100C}";
+    pub const CLEAR: &str = "\u{F100D}";
+    pub const REPLACE: &str = "\u{F100E}";
+    pub const ADD: &str = "\u{F100F}";
+    pub const DOWNLOAD: &str = "\u{F1010}";
+    pub const SAVE: &str = "\u{F1011}";
+    pub const EYE: &str = "\u{F1012}";
+    pub const MINIMIZE: &str = "\u{F1013}";
+    pub const MAXIMIZE: &str = "\u{F1014}";
+    pub const TEXT: &str = "\u{F1015}";
+    pub const CHECKLIST: &str = "\u{F1016}";
 }
 
 /// Icons offered for custom actions.
 pub const ACTION_ICONS: [&str; 12] = [
     icons::EDIT,
     icons::BULLETED_LIST,
-    icons::CHEVRON_DOWN,
-    icons::CHEVRON_UP,
-    icons::CLEAR,
-    icons::REPAIR,
+    icons::MINIMIZE,
+    icons::MAXIMIZE,
+    icons::TEXT,
+    icons::CHECKLIST,
+    icons::REPLACE,
     icons::WORLD,
     icons::SEARCH,
     icons::CHECK_MARK,
     icons::COPY,
     icons::EYE,
-    icons::WARNING,
 ];
-
-/// Glyphs of egui's bundled monochrome icon font on Linux.
-#[cfg(not(windows))]
-pub mod icons {
-    pub const TRASH: &str = "\u{1F5D1}";
-    pub const SEARCH: &str = "\u{1F50D}";
-    pub const SETTINGS: &str = "\u{2699}";
-    pub const WORLD: &str = "\u{1F310}";
-    pub const CLOSE: &str = "\u{1F5D9}";
-    pub const WARNING: &str = "\u{26A0}";
-    pub const CHECK_MARK: &str = "\u{2714}";
-    pub const EDIT: &str = "\u{270F}";
-    pub const COPY: &str = "\u{1F5D0}";
-    pub const REFRESH: &str = "\u{27F3}";
-    pub const CHEVRON_DOWN: &str = "\u{23F7}";
-    pub const CHEVRON_UP: &str = "\u{23F6}";
-    pub const BULLETED_LIST: &str = "\u{2630}";
-    pub const CLEAR: &str = "\u{1F5DB}";
-    pub const REPAIR: &str = "\u{1F527}";
-    pub const ADD: &str = "+";
-    pub const UP: &str = "\u{23F6}";
-    pub const DOWN: &str = "\u{23F7}";
-    pub const DOWNLOAD: &str = "\u{2B8B}";
-    pub const SAVE: &str = "\u{1F4BE}";
-    pub const EYE: &str = "\u{1F441}";
-}
 
 #[derive(Clone, Copy, Debug)]
 pub struct SpectrumTheme {
@@ -192,7 +167,7 @@ pub fn configure_egui_theme(ctx: &egui::Context, theme: &SpectrumTheme) {
     v.panel_fill = theme.background;
     v.window_fill = theme.surface;
     v.window_stroke = Stroke::new(1.0, theme.border);
-    v.window_corner_radius = CornerRadius::same(8);
+    v.window_corner_radius = CornerRadius::same(10);
 
     v.widgets.noninteractive.bg_fill = theme.surface;
     v.widgets.noninteractive.bg_stroke = Stroke::new(1.0, theme.border);
@@ -202,17 +177,17 @@ pub fn configure_egui_theme(ctx: &egui::Context, theme: &SpectrumTheme) {
     v.widgets.inactive.bg_fill = theme.surface_elevated;
     v.widgets.inactive.bg_stroke = Stroke::new(1.0, theme.border);
     v.widgets.inactive.fg_stroke = Stroke::new(1.0, theme.text_primary);
-    v.widgets.inactive.corner_radius = CornerRadius::same(4);
+    v.widgets.inactive.corner_radius = CornerRadius::same(8);
 
     v.widgets.hovered.bg_fill = theme.surface_hover;
     v.widgets.hovered.bg_stroke = Stroke::new(1.0, theme.border);
     v.widgets.hovered.fg_stroke = Stroke::new(1.0, theme.text_primary);
-    v.widgets.hovered.corner_radius = CornerRadius::same(4);
+    v.widgets.hovered.corner_radius = CornerRadius::same(8);
 
     v.widgets.active.bg_fill = theme.surface_active;
     v.widgets.active.bg_stroke = Stroke::new(1.0, theme.border);
     v.widgets.active.fg_stroke = Stroke::new(1.0, theme.text_primary);
-    v.widgets.active.corner_radius = CornerRadius::same(4);
+    v.widgets.active.corner_radius = CornerRadius::same(8);
 
     // The "open" state doubles as the ComboBox DROPDOWN menu surface:
     // elevated fill + real border, like any Spectrum popover. egui's
@@ -229,18 +204,67 @@ pub fn configure_egui_theme(ctx: &egui::Context, theme: &SpectrumTheme) {
     v.selection.stroke = Stroke::new(1.0, theme.accent_badge_text);
 
     ctx.set_visuals(v);
+
+    // Spectrum's type scale: 12 detail, 14 body and controls, 18 heading.
+    // Set once: replacing the styles every frame would invalidate layout caches.
+    static TEXT_STYLES: std::sync::Once = std::sync::Once::new();
+    TEXT_STYLES.call_once(|| {
+        ctx.all_styles_mut(|style| {
+            use egui::{FontFamily, TextStyle};
+            style.text_styles = [
+                (TextStyle::Small, FontId::new(12.0, FontFamily::Proportional)),
+                (TextStyle::Body, FontId::new(14.0, FontFamily::Proportional)),
+                (TextStyle::Button, FontId::new(14.0, FontFamily::Proportional)),
+                (TextStyle::Heading, FontId::new(18.0, FontFamily::Proportional)),
+                (TextStyle::Monospace, FontId::new(13.0, FontFamily::Monospace)),
+            ]
+            .into();
+        });
+    });
 }
 
-/// Sets up Segoe UI + Segoe UI Symbol typography from Windows system fonts.
-/// Linux text uses the desktop's sans-serif font when fontconfig finds one
-/// that covers sub- and superscript letters, then egui's bundled font. Icons
-/// come from a subset of emoji-icon-font (see assets/refined-icons-LICENSE.txt).
-#[cfg(not(windows))]
+/// Loads the text fonts, then the Spectrum icons as the last fallback.
 pub fn setup_custom_fonts(ctx: &egui::Context) {
     let mut fonts = egui::FontDefinitions::default();
-    let Some(family) = fonts.families.get_mut(&egui::FontFamily::Proportional) else {
-        return;
+    let mut add = |name: &str, data: egui::FontData, first: bool| {
+        fonts.font_data.insert(name.to_owned(), std::sync::Arc::new(data));
+        if let Some(family) = fonts.families.get_mut(&egui::FontFamily::Proportional) {
+            if first {
+                family.insert(0, name.to_owned());
+            } else {
+                family.push(name.to_owned());
+            }
+        }
     };
+    add_text_fonts(&mut add);
+    add(
+        "RefinedIcons",
+        egui::FontData::from_static(include_bytes!("../assets/refined-icons.ttf")),
+        false,
+    );
+    ctx.set_fonts(fonts);
+}
+
+/// Segoe UI with Segoe UI Symbol as fallback. Segoe MDL2 Assets keeps icons
+/// of custom actions made before 0.4.1 visible.
+#[cfg(windows)]
+fn add_text_fonts(add: &mut impl FnMut(&str, egui::FontData, bool)) {
+    let font_dir = std::path::Path::new("C:\\Windows\\Fonts");
+    for (name, file, first) in [
+        ("SegoeUI", "segoeui.ttf", true),
+        ("SegoeUISymbol", "seguisym.ttf", false),
+        ("SegoeMDL2", "segmdl2.ttf", false),
+    ] {
+        if let Ok(bytes) = std::fs::read(font_dir.join(file)) {
+            add(name, egui::FontData::from_owned(bytes), first);
+        }
+    }
+}
+
+/// The desktop's sans-serif font when fontconfig finds one that covers
+/// sub- and superscript letters, ahead of egui's bundled font.
+#[cfg(not(windows))]
+fn add_text_fonts(add: &mut impl FnMut(&str, egui::FontData, bool)) {
     let system = std::process::Command::new("fc-match")
         .args(["--format=%{index}:%{file}", "sans-serif:charset=2099"])
         .output()
@@ -251,57 +275,10 @@ pub fn setup_custom_fonts(ctx: &egui::Context) {
             Some((index.parse().ok()?, std::fs::read(file).ok()?))
         });
     if let Some((index, bytes)) = system {
-        family.insert(0, "SystemSans".to_owned());
         let mut data = egui::FontData::from_owned(bytes);
         data.index = index;
-        fonts.font_data.insert("SystemSans".to_owned(), std::sync::Arc::new(data));
+        add("SystemSans", data, true);
     }
-    family.push("RefinedIcons".to_owned());
-    fonts.font_data.insert(
-        "RefinedIcons".to_owned(),
-        std::sync::Arc::new(egui::FontData::from_static(include_bytes!(
-            "../assets/refined-icons.ttf"
-        ))),
-    );
-    ctx.set_fonts(fonts);
-}
-
-#[cfg(windows)]
-pub fn setup_custom_fonts(ctx: &egui::Context) {
-    let mut fonts = egui::FontDefinitions::default();
-    let font_dir = std::path::Path::new("C:\\Windows\\Fonts");
-
-    if let Ok(bytes) = std::fs::read(font_dir.join("segoeui.ttf")) {
-        fonts.font_data.insert(
-            "SegoeUI".to_owned(),
-            std::sync::Arc::new(egui::FontData::from_owned(bytes)),
-        );
-        if let Some(family) = fonts.families.get_mut(&egui::FontFamily::Proportional) {
-            family.insert(0, "SegoeUI".to_owned());
-        }
-    }
-
-    if let Ok(bytes) = std::fs::read(font_dir.join("seguisym.ttf")) {
-        fonts.font_data.insert(
-            "SegoeUISymbol".to_owned(),
-            std::sync::Arc::new(egui::FontData::from_owned(bytes)),
-        );
-        if let Some(family) = fonts.families.get_mut(&egui::FontFamily::Proportional) {
-            family.push("SegoeUISymbol".to_owned());
-        }
-    }
-
-    if let Ok(bytes) = std::fs::read(font_dir.join("segmdl2.ttf")) {
-        fonts.font_data.insert(
-            "SegoeMDL2".to_owned(),
-            std::sync::Arc::new(egui::FontData::from_owned(bytes)),
-        );
-        if let Some(family) = fonts.families.get_mut(&egui::FontFamily::Proportional) {
-            family.push("SegoeMDL2".to_owned());
-        }
-    }
-
-    ctx.set_fonts(fonts);
 }
 
 /// Refined product badge in the Studio header: the actual app icon
@@ -362,6 +339,20 @@ pub fn spectrum_button_compact(
     styled_button(ui, icon, label, primary, 26.0, 12.0, theme)
 }
 
+/// Spectrum keyboard focus indicator: a 2 px accent ring with a 2 px gap.
+/// Pointer clicks also focus egui widgets, so the ring shows only while
+/// the keyboard moves focus.
+pub fn focus_ring(ui: &Ui, response: &Response, radius: f32, theme: &SpectrumTheme) {
+    if response.has_focus() && !ui.input(|i| i.pointer.any_down() || i.pointer.any_released()) {
+        ui.painter().rect_stroke(
+            response.rect.expand(2.0),
+            CornerRadius::same((radius + 2.0).round() as u8),
+            Stroke::new(2.0, theme.accent),
+            StrokeKind::Outside,
+        );
+    }
+}
+
 fn styled_button(
     ui: &mut Ui,
     icon: Option<&str>,
@@ -380,6 +371,8 @@ fn styled_button(
         .color(if primary { Color32::WHITE } else { theme.text_primary });
     let rich = if primary { rich.strong() } else { rich };
 
+    // Spectrum 2 buttons are pill shaped.
+    let corner = CornerRadius::same((height / 2.0).round() as u8);
     let button = if primary {
         egui::Button::new(rich)
             .fill(theme.accent)
@@ -389,7 +382,9 @@ fn styled_button(
             .fill(theme.surface_elevated)
             .stroke(Stroke::new(1.0, theme.border))
     };
-    ui.add(button.min_size(Vec2::new(0.0, height)))
+    let response = ui.add(button.min_size(Vec2::new(0.0, height)).corner_radius(corner));
+    focus_ring(ui, &response, height / 2.0, theme);
+    response
 }
 
 /// Spectrum 2 sliding switch (pill track, white knob).
@@ -423,6 +418,7 @@ pub fn spectrum_switch(ui: &mut Ui, on: &mut bool, theme: &SpectrumTheme) -> Res
         let knob_center = Pos2::new(knob_x, rect.center().y);
 
         ui.painter().circle(knob_center, knob_radius, Color32::WHITE, Stroke::NONE);
+        focus_ring(ui, &response, rect.height() / 2.0, theme);
     }
 
     response
@@ -656,7 +652,7 @@ pub fn kbd_button(
     let label_color = if primary { Color32::WHITE } else { theme.text_primary };
     let kbd_color = if primary { Color32::WHITE } else { theme.text_secondary };
 
-    let font = FontId::proportional(13.0);
+    let font = FontId::proportional(14.0);
     let label_galley = ui
         .painter()
         .layout(label.to_string(), font, label_color, f32::INFINITY);
@@ -691,7 +687,8 @@ pub fn kbd_button(
     } else {
         theme.surface_elevated
     };
-    let corner = CornerRadius::same(if primary { 16 } else { 6 });
+    let corner = CornerRadius::same((height / 2.0) as u8);
+    focus_ring(ui, &response, height / 2.0, theme);
     ui.painter().rect_filled(rect, corner, fill);
     if !primary {
         ui.painter()
