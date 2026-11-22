@@ -1,10 +1,16 @@
 name: Release
 
-# Pushing a tag such as v0.4.0 builds Windows and Linux on their own runners
-# and publishes the release. The annotated tag message becomes the notes.
+# Builds Windows and Linux on their own runners and publishes the release.
+# Pushing a tag such as v0.4.0 uses the annotated tag message as the notes.
+# Running the workflow by hand tags the version in Cargo.toml at this commit.
 on:
   push:
     tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      notes:
+        description: Release notes
+        required: true
 
 permissions:
   contents: write
@@ -50,9 +56,17 @@ jobs:
         with:
           path: assets
           merge-multiple: true
-      - env:
+      - if: github.event_name == 'push'
+        env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.ref_name }}
         run: |
           git fetch --force origin "refs/tags/$TAG:refs/tags/$TAG"
           gh release create "$TAG" assets/* --title "Refined ${TAG#v}" --notes-from-tag
+      - if: github.event_name == 'workflow_dispatch'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NOTES: ${{ inputs.notes }}
+        run: |
+          VERSION=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -1)
+          gh release create "v$VERSION" assets/* --target "$GITHUB_SHA" --title "Refined $VERSION" --notes "$NOTES"
