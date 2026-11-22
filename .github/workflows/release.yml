@@ -54,7 +54,8 @@ jobs:
           fetch-depth: 0
       - uses: actions/download-artifact@v4
         with:
-          path: assets
+          # Not "assets": the checkout already has an assets folder.
+          path: release-files
           merge-multiple: true
       - if: github.event_name == 'push'
         env:
@@ -62,11 +63,11 @@ jobs:
           TAG: ${{ github.ref_name }}
         run: |
           git fetch --force origin "refs/tags/$TAG:refs/tags/$TAG"
-          gh release create "$TAG" assets/* --title "Refined ${TAG#v}" --notes-from-tag
+          gh release create "$TAG" release-files/* --title "Refined ${TAG#v}" --notes-from-tag
       - if: github.event_name == 'workflow_dispatch'
         env:
           GH_TOKEN: ${{ github.token }}
           NOTES: ${{ inputs.notes }}
         run: |
           VERSION=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -1)
-          gh release create "v$VERSION" assets/* --target "$GITHUB_SHA" --title "Refined $VERSION" --notes "$NOTES"
+          gh release create "v$VERSION" release-files/* --target "$GITHUB_SHA" --title "Refined $VERSION" --notes "$NOTES"
