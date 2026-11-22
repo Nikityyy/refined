@@ -16,9 +16,19 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 const RELEASES_LATEST: &str = "https://api.github.com/repos/Nikityyy/refined/releases/latest";
-/// The portable binary asset each release publishes.
+/// The portable binary asset each release publishes for this platform.
+#[cfg(windows)]
 const ASSET_NAME: &str = "Refined.exe";
+#[cfg(windows)]
 const ASSET_HASH_NAME: &str = "Refined.exe.sha256";
+#[cfg(windows)]
+const EXECUTABLE_MAGIC: &[u8] = b"MZ";
+#[cfg(target_os = "linux")]
+const ASSET_NAME: &str = "refined-linux-x86_64";
+#[cfg(target_os = "linux")]
+const ASSET_HASH_NAME: &str = "refined-linux-x86_64.sha256";
+#[cfg(target_os = "linux")]
+const EXECUTABLE_MAGIC: &[u8] = b"\x7fELF";
 
 const MAX_EXE_BYTES: u64 = 64 * 1024 * 1024;
 const RESTART_ARG: &str = "--update-restart";
@@ -98,7 +108,7 @@ pub fn check_latest() -> Result<Option<UpdateInfo>, String> {
         .assets
         .iter()
         .find(|a| a.name.eq_ignore_ascii_case(ASSET_NAME))
-        .ok_or("This release has no Refined.exe asset.")?;
+        .ok_or_else(|| format!("This release has no {ASSET_NAME} asset."))?;
     Ok(Some(UpdateInfo {
         version: resp.tag_name.trim_start_matches('v').to_string(),
         url: asset.browser_download_url.clone(),
@@ -152,12 +162,18 @@ pub fn download(info: &UpdateInfo) -> Result<String, String> {
     if binary.len() as u64 != info.size || !matches_checksum(&binary, &checksum) {
         return Err("The update failed its integrity check. Try downloading it again.".into());
     }
-    std::fs::write(paths.staged, binary).map_err(|e| format!("Could not stage the update: {e}"))?;
+    std::fs::write(&paths.staged, binary).map_err(|e| format!("Could not stage the update: {e}"))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&paths.staged, std::fs::Permissions::from_mode(0o755))
+            .map_err(|e| format!("Could not stage the update: {e}"))?;
+    }
     Ok(checksum)
 }
 
 fn matches_checksum(bytes: &[u8], expected: &str) -> bool {
-    bytes.starts_with(b"MZ") && sha256_hex(bytes).eq_ignore_ascii_case(expected)
+    bytes.starts_with(EXECUTABLE_MAGIC) && sha256_hex(bytes).eq_ignore_ascii_case(expected)
 }
 
 struct UpdatePaths {
@@ -170,7 +186,7 @@ fn update_paths() -> Result<UpdatePaths, String> {
     let exe = std::env::current_exe().map_err(|e| format!("Cannot locate Refined: {e}"))?;
     let dir = exe.parent().unwrap_or(Path::new("."));
     Ok(UpdatePaths {
-        backup: exe.with_extension("old.exe"),
+        backup: exe.with_extension(if cfg!(windows) { "old.exe" } else { "old" }),
         staged: dir.join("Refined.update.tmp"),
         exe,
     })
@@ -224,6 +240,28 @@ fn restore_backup(paths: &UpdatePaths, reason: String) -> String {
     }
 }
 
+/// After an update restart, waits up to 10 seconds for the old process.
+#[cfg(target_os = "linux")]
+pub fn wait_for_previous_process() -> bool {
+    let mut args = std::env::args();
+    let Some(pid) = args
+        .find(|arg| arg == RESTART_ARG)
+        .and_then(|_| args.next())
+        .and_then(|arg| arg.parse::<u32>().ok())
+    else {
+        return true;
+    };
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while Path::new(&format!("/proc/{pid}")).exists() {
+        if std::time::Instant::now() >= deadline {
+            return false;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    true
+}
+
+#[cfg(windows)]
 pub fn wait_for_previous_process() -> bool {
     use windows::Win32::Foundation::{CloseHandle, WAIT_OBJECT_0};
     use windows::Win32::System::Threading::{
@@ -261,10 +299,11 @@ mod tests {
 
     #[test]
     fn altered_update_is_rejected() {
-        let original = b"MZ verified executable";
-        let checksum = sha256_hex(original);
-        assert!(matches_checksum(original, &checksum));
-        assert!(!matches_checksum(b"MZ altered executable", &checksum));
+        let original = [super::EXECUTABLE_MAGIC, b" verified executable"].concat();
+        let altered = [super::EXECUTABLE_MAGIC, b" altered executable"].concat();
+        let checksum = sha256_hex(&original);
+        assert!(matches_checksum(&original, &checksum));
+        assert!(!matches_checksum(&altered, &checksum));
         assert!(!matches_checksum(b"plain text", &sha256_hex(b"plain text")));
     }
 

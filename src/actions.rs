@@ -78,6 +78,7 @@ pub fn refresh_builtins(actions: &mut Vec<ActionItem>) {
             }
             action.default_instruction = default.default_instruction;
             action.description = default.description;
+            action.icon = default.icon;
         } else if default.id == "flashcards"
             && !actions.iter().any(|action| action.id == default.id)
         {
@@ -139,11 +140,11 @@ pub fn standard_languages() -> &'static [LanguageChoice] {
                 code: "Portuguese".to_string(),
             },
             LanguageChoice {
-                label: "Japanese (日本語)".to_string(),
+                label: "Japanese".to_string(),
                 code: "Japanese".to_string(),
             },
             LanguageChoice {
-                label: "Chinese (简体中文)".to_string(),
+                label: "Chinese (Simplified)".to_string(),
                 code: "Simplified Chinese".to_string(),
             },
             LanguageChoice {

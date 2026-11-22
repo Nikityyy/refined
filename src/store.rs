@@ -24,6 +24,7 @@ impl Default for ThemeMode {
 /// Hard cap on stored refinements; the history file must stay tiny enough
 /// that saving it never stalls the UI thread.
 const HISTORY_LIMIT: usize = 500;
+const TRIM_INTERVAL: usize = 100;
 
 /// Moves an unreadable store file aside so it can be recovered later.
 /// Timestamped: a second corruption must not overwrite the first backup.
@@ -107,11 +108,12 @@ pub struct Store {
     pub history: Vec<HistoryEntry>,
     data_dir: PathBuf,
     history_loaded: bool,
+    appends_since_load: usize,
 }
 
 impl Store {
     pub fn open() -> Self {
-        let data_dir = dirs_fallback_app_data();
+        let data_dir = data_dir();
         let _ = create_dir_all(&data_dir);
 
         let settings_file = data_dir.join("settings.json");
@@ -133,6 +135,7 @@ impl Store {
         };
 
         settings.migrate_hotkey_default();
+        settings.groq.migrate_reasoning_default();
 
         // Earlier releases always used this fixed output limit.
         if !settings.groq.output_limit_edited && settings.groq.max_completion_tokens == 32768 {
@@ -144,7 +147,11 @@ impl Store {
         }
         refresh_builtins(&mut settings.actions);
 
-        Self { settings, history: Vec::new(), data_dir, history_loaded: false }
+        Self { settings, history: Vec::new(), data_dir, history_loaded: false, appends_since_load: 0 }
+    }
+
+    fn history_path(&self) -> PathBuf {
+        self.data_dir.join("history.jsonl")
     }
 
     pub fn load_history(&mut self) {
@@ -152,17 +159,35 @@ impl Store {
             return;
         }
         self.history_loaded = true;
-        let path = self.data_dir.join("history.json");
-        if !path.exists() {
-            return;
-        }
-
-        match read_json_bom_tolerant(&path) {
-            Some(history) => self.history = history,
-            None => {
-                eprintln!("[refined] history.json unreadable, starting with an empty history");
-                quarantine_corrupt(&path);
+        let path = self.history_path();
+        match crate::history::load(&path, HISTORY_LIMIT) {
+            Ok((history, lossy)) => {
+                self.history = history;
+                if lossy {
+                    self.save_history();
+                }
             }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                // Releases before 0.4.0 kept one pretty-printed JSON array.
+                let legacy = self.data_dir.join("history.json");
+                if !legacy.exists() {
+                    return;
+                }
+                match read_json_bom_tolerant::<Vec<HistoryEntry>>(&legacy) {
+                    Some(mut history) => {
+                        history.truncate(HISTORY_LIMIT);
+                        self.history = history;
+                        if crate::history::rewrite(&path, &self.history).is_ok() {
+                            let _ = std::fs::remove_file(legacy);
+                        }
+                    }
+                    None => {
+                        eprintln!("[refined] history.json unreadable, starting with an empty history");
+                        quarantine_corrupt(&legacy);
+                    }
+                }
+            }
+            Err(error) => eprintln!("[refined] could not read history: {error}"),
         }
     }
 
@@ -192,18 +217,33 @@ impl Store {
     }
 
     pub fn save_history(&self) {
-        if let Err(e) = self.write_json("history.json", &self.history) {
+        if let Err(e) = crate::history::rewrite(&self.history_path(), &self.history) {
             eprintln!("[refined] could not save history: {e}");
         }
     }
 
+    /// Appends without loading earlier edits. Every [`TRIM_INTERVAL`]
+    /// appends, the file is read once and trimmed to [`HISTORY_LIMIT`].
     pub fn add_history(&mut self, entry: HistoryEntry) {
+        if !self.history_loaded
+            && self.appends_since_load < TRIM_INTERVAL
+            && !self.data_dir.join("history.json").exists()
+        {
+            self.appends_since_load += 1;
+            if let Err(e) = crate::history::append(&self.history_path(), &entry) {
+                eprintln!("[refined] could not save history: {e}");
+            }
+            return;
+        }
         self.load_history();
+        if let Err(e) = crate::history::append(&self.history_path(), &entry) {
+            eprintln!("[refined] could not save history: {e}");
+        }
         self.history.insert(0, entry);
         if self.history.len() > HISTORY_LIMIT {
             self.history.truncate(HISTORY_LIMIT);
+            self.save_history();
         }
-        self.save_history();
     }
 
     pub fn clear_history(&mut self) {
@@ -255,12 +295,18 @@ impl Store {
     }
 }
 
-fn dirs_fallback_app_data() -> PathBuf {
-    if let Some(local_app_data) = std::env::var_os("LOCALAPPDATA") {
-        PathBuf::from(local_app_data).join("Refined")
-    } else {
-        PathBuf::from("Refined_Data")
-    }
+/// `%LOCALAPPDATA%\\Refined` on Windows, `$XDG_DATA_HOME/refined` or
+/// `~/.local/share/refined` on Linux.
+pub fn data_dir() -> PathBuf {
+    #[cfg(windows)]
+    let base = std::env::var_os("LOCALAPPDATA").map(|dir| PathBuf::from(dir).join("Refined"));
+    #[cfg(not(windows))]
+    let base = std::env::var_os("XDG_DATA_HOME")
+        .map(PathBuf::from)
+        .filter(|dir| dir.is_absolute())
+        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".local/share")))
+        .map(|dir| dir.join("refined"));
+    base.unwrap_or_else(|| PathBuf::from("Refined_Data"))
 }
 
 /// Reads a JSON file, tolerating a UTF-8 BOM prefix (serde_json rejects BOMs,
@@ -305,6 +351,7 @@ mod tests {
             history: Vec::new(),
             data_dir: PathBuf::new(),
             history_loaded: false,
+            appends_since_load: 0,
         };
         let mut studio = crate::studio::Studio::new();
         studio.update_state = Some(crate::updater::UpdateState::Ready {

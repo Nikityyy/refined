@@ -39,7 +39,7 @@ pub struct Studio {
     pub new_action_dialog_open: bool,
     pub new_action_name: String,
     pub new_action_desc: String,
-    pub new_action_icon: String,
+    pub new_action_icon: &'static str,
     pub new_action_prompt: String,
     /// Set from the hotkey thread when the configured shortcut fails to register.
     pub hotkey_failed: bool,
@@ -75,7 +75,7 @@ impl Studio {
             new_action_dialog_open: false,
             new_action_name: String::new(),
             new_action_desc: String::new(),
-            new_action_icon: "E70F".to_string(),
+            new_action_icon: icons::EDIT,
             new_action_prompt: String::new(),
             hotkey_failed: false,
             settings_save_at: None,
@@ -576,7 +576,7 @@ impl Studio {
                             // Content preview
                             if let Some(chunks) = diff {
                                 ui.label(RichText::new("Original text").font(FontId::proportional(12.0)).color(theme.text_secondary));
-                                ui.label(RichText::new(&entry.original_text).font(FontId::proportional(13.0)).color(theme.text_primary));
+                                ui.label(RichText::new(crate::rich_text::readable(&entry.original_text)).font(FontId::proportional(13.0)).color(theme.text_primary));
                                 ui.add_space(6.0);
 
                                 ui.label(RichText::new("Changes").font(FontId::proportional(12.0)).color(theme.accent).strong());
@@ -591,7 +591,7 @@ impl Studio {
                             } else {
                                 // Char-boundary-safe preview: raw byte slicing
                                 // would panic on multi-byte UTF-8 (umlauts, CJK).
-                                let preview = truncate_chars(&entry.refined_text, 140);
+                                let preview = truncate_chars(&crate::rich_text::readable(&entry.refined_text), 140);
                                 ui.label(RichText::new(preview).font(FontId::proportional(13.0)).color(theme.text_primary));
                             }
                         });
@@ -608,7 +608,7 @@ impl Studio {
             if self.expanded_history.as_ref().is_some_and(|(shown, _)| shown == &id) {
                 self.expanded_history = None;
             } else if let Some(entry) = store.history.iter().find(|entry| entry.id == id) {
-                self.expanded_history = Some((id, crate::diff::compute_diff(&entry.original_text, &entry.refined_text).0));
+                self.expanded_history = Some((id, entry.diff().0));
             }
         }
     }
@@ -935,7 +935,7 @@ impl Studio {
                     self.new_action_dialog_open = true;
                     self.new_action_name.clear();
                     self.new_action_desc.clear();
-                    self.new_action_icon = "E70F".to_string();
+                    self.new_action_icon = icons::EDIT;
                     self.new_action_prompt.clear();
                 }
 
@@ -974,11 +974,17 @@ impl Studio {
                     ui.horizontal(|ui| {
                         ui.label(RichText::new("Name:").font(FontId::proportional(12.0)).color(theme.text_secondary));
                         ui.add_sized([160.0, 24.0], egui::TextEdit::singleline(&mut self.new_action_name).align(Align2::LEFT_CENTER).hint_text("e.g. Formalize"));
+                    });
 
-                        ui.add_space(10.0);
+                    ui.add_space(6.0);
+                    ui.horizontal_wrapped(|ui| {
                         ui.label(RichText::new("Icon:").font(FontId::proportional(12.0)).color(theme.text_secondary));
-                        ui.add_sized([60.0, 24.0], egui::TextEdit::singleline(&mut self.new_action_icon).align(Align2::LEFT_CENTER).hint_text("e.g. E70F"))
-                            .on_hover_text("A Segoe MDL2 icon codepoint, e.g. E70F");
+                        for icon in crate::theme::ACTION_ICONS {
+                            let label = RichText::new(icon).font(FontId::proportional(14.0)).color(theme.text_primary);
+                            if ui.selectable_label(self.new_action_icon == icon, label).clicked() {
+                                self.new_action_icon = icon;
+                            }
+                        }
                     });
 
                     ui.add_space(6.0);
@@ -997,13 +1003,10 @@ impl Studio {
 
                     let name = self.new_action_name.trim();
                     let id = name.to_lowercase().replace(' ', "_");
-                    let icon = mdl2_codepoint(self.new_action_icon.trim()).and_then(char::from_u32);
                     let duplicate = store.settings.actions.iter().any(|action| action.id == id);
                     let prompt = self.new_action_prompt.trim();
                     let error = if duplicate {
                         Some("An action with this name already exists.")
-                    } else if icon.is_none() {
-                        Some("Enter a Segoe MDL2 icon code such as E70F.")
                     } else {
                         None
                     };
@@ -1020,7 +1023,7 @@ impl Studio {
                                 id,
                                 name: name.into(),
                                 description: self.new_action_desc.trim().into(),
-                                icon: icon.unwrap_or_default().to_string(),
+                                icon: self.new_action_icon.into(),
                                 shortcut: String::new(),
                                 prompt_instruction: prompt.into(),
                                 default_instruction: prompt.into(),
@@ -1212,6 +1215,27 @@ impl Studio {
                 });
             }
 
+            // Wayland compositors do not deliver global key grabs to apps.
+            // A desktop shortcut that runs `--trigger` opens the palette.
+            #[cfg(target_os = "linux")]
+            if std::env::var_os("WAYLAND_DISPLAY").is_some() {
+                let command = std::env::current_exe()
+                    .map(|exe| format!("\"{}\" --trigger", exe.display()))
+                    .unwrap_or_else(|_| "refined --trigger".into());
+                ui.add_space(8.0);
+                ui.label(
+                    RichText::new("On Wayland, add a keyboard shortcut in your desktop settings that runs this command:")
+                        .font(FontId::proportional(12.0))
+                        .color(theme.text_secondary),
+                );
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new(&command).font(FontId::monospace(12.0)).color(theme.text_primary));
+                    if spectrum_button_compact(ui, Some(icons::COPY), "Copy", false, theme).clicked() {
+                        crate::clipboard::set_clipboard_text(&command);
+                    }
+                });
+            }
+
             ui.add_space(14.0);
 
             // Groq API Key Card
@@ -1362,6 +1386,12 @@ impl Studio {
                     });
                     if let Some(model) = picked {
                         config.model = model;
+                        // An effort the new model does not offer falls back
+                        // to the model default, which is Medium for GPT-OSS.
+                        let options = config.reasoning_options();
+                        if !options.contains(&config.reasoning_effort.as_str()) && options.contains(&"low") {
+                            config.reasoning_effort = "low".into();
+                        }
                         self.mark_settings_dirty();
                     }
                     ui.end_row();
@@ -1482,7 +1512,7 @@ impl Studio {
                     ui.set_width(ui.available_width());
 
                     ui.label(
-                        RichText::new("Appearance & Windows Integration")
+                        RichText::new(format!("Appearance & {OS_NAME} Integration"))
                             .font(FontId::proportional(14.0))
                             .color(theme.text_primary)
                             .strong(),
@@ -1576,7 +1606,7 @@ impl Studio {
                             autostart::set(autostart_val);
                         }
                         ui.add_space(8.0);
-                        ui.label(RichText::new("Start Refined automatically with Windows").color(theme.text_primary));
+                        ui.label(RichText::new(format!("Start Refined automatically with {OS_NAME}")).color(theme.text_primary));
                     });
 
                     ui.add_space(10.0);
@@ -1667,18 +1697,8 @@ impl Studio {
     }
 }
 
-/// Parses a Segoe MDL2 icon input (e.g. "E70F" or "\u{E70F}") into a u32
 /// codepoint within the MDL2 private-use range; None when invalid.
-fn mdl2_codepoint(input: &str) -> Option<u32> {
-    let t = input
-        .trim()
-        .trim_start_matches("\\u{")
-        .trim_start_matches("U+")
-        .trim_start_matches("u+")
-        .trim_end_matches('}');
-    let cp = u32::from_str_radix(t, 16).ok()?;
-    (0xE000..=0xF8FF).contains(&cp).then_some(cp)
-}
+const OS_NAME: &str = if cfg!(windows) { "Windows" } else { "Linux" };
 
 /// Formats a number with thousands separators (12345 -> "12,345").
 fn fmt_thousands(n: usize) -> String {
@@ -1749,7 +1769,7 @@ fn render_metric_card(
 
 #[cfg(test)]
 mod tests {
-    use super::{fmt_thousands, mdl2_codepoint, truncate_chars};
+    use super::{fmt_thousands, truncate_chars};
 
     #[test]
     fn thousands_separators() {
@@ -1767,17 +1787,5 @@ mod tests {
         assert!(!out.trim_end_matches('.').contains("replacemen"));
         // Short input passes through untouched.
         assert_eq!(truncate_chars("short", 20), "short");
-    }
-
-    #[test]
-    fn mdl2_codes_are_validated() {
-        assert_eq!(mdl2_codepoint("E70F"), Some(0xE70F));
-        assert_eq!(mdl2_codepoint("\\u{E74E}"), Some(0xE74E));
-        assert_eq!(mdl2_codepoint("u+E74E"), Some(0xE74E));
-        assert_eq!(mdl2_codepoint("ZZZZ"), None);
-        // Outside the MDL2 private-use range -> rejected.
-        assert_eq!(mdl2_codepoint("0041"), None);
-        assert_eq!(mdl2_codepoint("F8FF"), Some(0xF8FF));
-        assert_eq!(mdl2_codepoint("F900"), None);
     }
 }

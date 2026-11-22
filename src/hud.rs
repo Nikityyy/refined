@@ -11,14 +11,127 @@ use eframe::egui::{
 };
 use std::sync::mpsc::{channel, Receiver};
 use std::time::Duration;
-use windows::Win32::Foundation::{HWND, POINT, RECT};
-use windows::Win32::Graphics::Gdi::{
-    GetMonitorInfoW, MonitorFromPoint, MONITORINFO, MONITOR_DEFAULTTONEAREST,
-};
-use windows::Win32::UI::Input::KeyboardAndMouse::{
-    GetAsyncKeyState, VIRTUAL_KEY, VK_ESCAPE, VK_LBUTTON, VK_MBUTTON, VK_RBUTTON,
-};
-use windows::Win32::UI::WindowsAndMessaging::{GetCursorPos, GetWindowRect};
+
+/// Global input state, so the palette can close on a click or Esc in
+/// another app while it does not have focus.
+#[cfg(windows)]
+mod input {
+    use windows::Win32::Foundation::{HWND, POINT, RECT};
+    use windows::Win32::Graphics::Gdi::{
+        GetMonitorInfoW, MonitorFromPoint, MONITORINFO, MONITOR_DEFAULTTONEAREST,
+    };
+    use windows::Win32::UI::Input::KeyboardAndMouse::{
+        GetAsyncKeyState, VIRTUAL_KEY, VK_ESCAPE, VK_LBUTTON, VK_MBUTTON, VK_RBUTTON,
+    };
+    use windows::Win32::UI::WindowsAndMessaging::{GetCursorPos, GetWindowRect};
+
+    fn key_down(key: VIRTUAL_KEY) -> bool {
+        unsafe { GetAsyncKeyState(i32::from(key.0)) < 0 }
+    }
+
+    pub fn escape_down() -> bool {
+        key_down(VK_ESCAPE)
+    }
+
+    pub fn left_button_down() -> bool {
+        key_down(VK_LBUTTON)
+    }
+
+    pub fn mouse_button_down() -> bool {
+        [VK_LBUTTON, VK_RBUTTON, VK_MBUTTON].into_iter().any(key_down)
+    }
+
+    pub fn pointer_over(window: isize, _rect: Option<eframe::egui::Rect>, _scale: f32) -> bool {
+        let mut point = POINT::default();
+        let mut rect = RECT::default();
+        let hwnd = HWND(window as *mut std::ffi::c_void);
+        (unsafe { GetCursorPos(&mut point).is_ok() && GetWindowRect(hwnd, &mut rect).is_ok() })
+            && (rect.left..rect.right).contains(&point.x)
+            && (rect.top..rect.bottom).contains(&point.y)
+    }
+
+    /// Work area (left, top, right, bottom) of the monitor at a point.
+    pub fn work_area(x: i32, y: i32) -> Option<(i32, i32, i32, i32)> {
+        unsafe {
+            let hmon = MonitorFromPoint(POINT { x, y }, MONITOR_DEFAULTTONEAREST);
+            if hmon.0.is_null() {
+                return None;
+            }
+            let mut mi = MONITORINFO {
+                cbSize: std::mem::size_of::<MONITORINFO>() as u32,
+                ..Default::default()
+            };
+            GetMonitorInfoW(hmon, &mut mi).as_bool().then_some((
+                mi.rcWork.left,
+                mi.rcWork.top,
+                mi.rcWork.right,
+                mi.rcWork.bottom,
+            ))
+        }
+    }
+
+    /// Native handle of the palette window, with Windows 11 rounded
+    /// corners and without the open animation.
+    pub fn prepare_window() -> isize {
+        use windows::core::{w, PCWSTR};
+        use windows::Win32::Graphics::Dwm::{
+            DwmSetWindowAttribute, DWMWA_TRANSITIONS_FORCEDISABLED,
+            DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_ROUND,
+        };
+        use windows::Win32::UI::WindowsAndMessaging::FindWindowW;
+
+        let Ok(hwnd) = (unsafe { FindWindowW(PCWSTR::null(), w!("Refined HUD")) }) else {
+            return 0;
+        };
+        let disable_transitions: i32 = 1;
+        unsafe {
+            let _ = DwmSetWindowAttribute(
+                hwnd,
+                DWMWA_TRANSITIONS_FORCEDISABLED,
+                std::ptr::from_ref(&disable_transitions).cast(),
+                std::mem::size_of_val(&disable_transitions) as u32,
+            );
+            let _ = DwmSetWindowAttribute(
+                hwnd,
+                DWMWA_WINDOW_CORNER_PREFERENCE,
+                std::ptr::from_ref(&DWMWCP_ROUND).cast(),
+                std::mem::size_of_val(&DWMWCP_ROUND) as u32,
+            );
+        }
+        hwnd.0 as isize
+    }
+}
+
+#[cfg(target_os = "linux")]
+mod input {
+    use crate::x11;
+
+    pub fn escape_down() -> bool {
+        x11::key_down(x11::XK_ESCAPE)
+    }
+
+    pub fn left_button_down() -> bool {
+        mouse_button_down()
+    }
+
+    pub fn mouse_button_down() -> bool {
+        x11::pointer().is_some_and(|(_, _, down)| down)
+    }
+
+    /// `rect` is the palette's outer rectangle in points.
+    pub fn pointer_over(_window: isize, rect: Option<eframe::egui::Rect>, scale: f32) -> bool {
+        let Some((x, y, _)) = x11::pointer() else { return false };
+        rect.is_some_and(|rect| rect.contains(eframe::egui::pos2(x as f32 / scale, y as f32 / scale)))
+    }
+
+    pub fn work_area(_x: i32, _y: i32) -> Option<(i32, i32, i32, i32)> {
+        x11::screen_size().map(|(width, height)| (0, 0, width, height))
+    }
+
+    pub fn prepare_window() -> isize {
+        0
+    }
+}
 
 pub const WIDTH: f32 = 480.0;
 
@@ -34,6 +147,7 @@ pub enum HudState {
     },
     Processing {
         action_name: String,
+        started: std::time::Instant,
     },
     DiffView {
         original_text: String,
@@ -83,14 +197,15 @@ pub struct Hud {
     pub demo_sticky: bool,
 }
 
-fn key_down(key: VIRTUAL_KEY) -> bool {
-    unsafe { GetAsyncKeyState(i32::from(key.0)) < 0 }
+/// The native handle of the window the selection came from.
+#[cfg(windows)]
+fn target(handle: isize) -> windows::Win32::Foundation::HWND {
+    windows::Win32::Foundation::HWND(handle as *mut std::ffi::c_void)
 }
 
-fn mouse_button_down() -> bool {
-    [VK_LBUTTON, VK_RBUTTON, VK_MBUTTON]
-        .into_iter()
-        .any(key_down)
+#[cfg(not(windows))]
+fn target(handle: isize) -> isize {
+    handle
 }
 
 /// The effective output language for a run: the custom language whenever the
@@ -103,32 +218,10 @@ fn resolved_language<'a>(selected: &'a str, custom: &'a str) -> &'a str {
     }
 }
 
-/// Computes multi-monitor clamped HUD position using Win32 monitor coordinates.
+/// Places the HUD next to the cursor, inside the monitor's work area.
 pub fn compute_clamped_hud_pos(cursor_x: i32, cursor_y: i32, width: f32, height: f32) -> Pos2 {
-    let pt = POINT {
-        x: cursor_x,
-        y: cursor_y,
-    };
-    let mut min_x = 0;
-    let mut max_x = 1920;
-    let mut min_y = 0;
-    let mut max_y = 1080;
-
-    unsafe {
-        let hmon = MonitorFromPoint(pt, MONITOR_DEFAULTTONEAREST);
-        if !hmon.0.is_null() {
-            let mut mi = MONITORINFO {
-                cbSize: std::mem::size_of::<MONITORINFO>() as u32,
-                ..Default::default()
-            };
-            if GetMonitorInfoW(hmon, &mut mi).as_bool() {
-                min_x = mi.rcWork.left;
-                max_x = mi.rcWork.right;
-                min_y = mi.rcWork.top;
-                max_y = mi.rcWork.bottom;
-            }
-        }
-    }
+    let (min_x, min_y, max_x, max_y) =
+        input::work_area(cursor_x, cursor_y).unwrap_or((0, 0, 1920, 1080));
 
     let desired_x = (cursor_x - 20) as f32;
     let desired_y = (cursor_y + 15) as f32;
@@ -183,7 +276,7 @@ impl Hud {
         self.seen_focus = false;
         self.window_handle = 0;
         self.dragging = false;
-        self.outside_input_down = key_down(VK_ESCAPE) || mouse_button_down();
+        self.outside_input_down = input::escape_down() || input::mouse_button_down();
         self.focus_requested = false;
         self.awaiting_paste_blur = false;
         // Reserve room for the expanded palette and an inline error.
@@ -202,36 +295,18 @@ impl Hud {
     }
 
     pub fn present(&mut self, ctx: &egui::Context) {
-        use windows::core::{w, PCWSTR};
-        use windows::Win32::Graphics::Dwm::{
-            DwmSetWindowAttribute, DWMWA_TRANSITIONS_FORCEDISABLED, DWMWA_WINDOW_CORNER_PREFERENCE,
-            DWMWCP_ROUND,
-        };
-        use windows::Win32::UI::WindowsAndMessaging::FindWindowW;
-
         // Winit creates the window hidden so its initial position and the
-        // first GL frame can be ready before DWM presents the palette.
-        if let Ok(hwnd) = unsafe { FindWindowW(PCWSTR::null(), w!("Refined HUD")) } {
-            self.window_handle = hwnd.0 as isize;
-            let disable_transitions: i32 = 1;
-            unsafe {
-                let _ = DwmSetWindowAttribute(
-                    hwnd,
-                    DWMWA_TRANSITIONS_FORCEDISABLED,
-                    std::ptr::from_ref(&disable_transitions).cast(),
-                    std::mem::size_of_val(&disable_transitions) as u32,
-                );
-                let _ = DwmSetWindowAttribute(
-                    hwnd,
-                    DWMWA_WINDOW_CORNER_PREFERENCE,
-                    std::ptr::from_ref(&DWMWCP_ROUND).cast(),
-                    std::mem::size_of_val(&DWMWCP_ROUND) as u32,
-                );
-            }
-        }
+        // first GL frame can be ready before the palette appears.
+        self.window_handle = input::prepare_window();
         self.presented = true;
         self.focus_requested = true;
         ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+        // X11 window managers ignore the stacking request made while the
+        // window was still unmapped, so the editor would cover the diff.
+        #[cfg(not(windows))]
+        ctx.send_viewport_cmd(egui::ViewportCommand::WindowLevel(
+            egui::WindowLevel::AlwaysOnTop,
+        ));
         ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
     }
 
@@ -245,13 +320,9 @@ impl Hud {
         ctx.request_repaint_of(egui::ViewportId::ROOT);
     }
 
-    fn pointer_over_window(&self) -> bool {
-        let mut point = POINT::default();
-        let mut rect = RECT::default();
-        let hwnd = HWND(self.window_handle as *mut std::ffi::c_void);
-        (unsafe { GetCursorPos(&mut point).is_ok() && GetWindowRect(hwnd, &mut rect).is_ok() })
-            && (rect.left..rect.right).contains(&point.x)
-            && (rect.top..rect.bottom).contains(&point.y)
+    fn pointer_over_window(&self, ui: &Ui) -> bool {
+        let rect = ui.input(|i| i.viewport().outer_rect);
+        input::pointer_over(self.window_handle, rect, ui.ctx().pixels_per_point())
     }
 
     pub fn dismiss_requested(&mut self, ui: &Ui) -> bool {
@@ -262,16 +333,16 @@ impl Hud {
             return false;
         }
         if self.dragging {
-            if key_down(VK_LBUTTON) {
+            if input::left_button_down() {
                 ui.ctx().request_repaint_after(Duration::from_millis(24));
                 return false;
             }
             self.dragging = false;
             self.seen_focus = false;
         }
-        let mouse_down = mouse_button_down();
-        let click_inside = mouse_down && self.pointer_over_window();
-        let input_down = key_down(VK_ESCAPE) || (mouse_down && !click_inside);
+        let mouse_down = input::mouse_button_down();
+        let click_inside = mouse_down && self.pointer_over_window(ui);
+        let input_down = input::escape_down() || (mouse_down && !click_inside);
         let pressed = input_down && !self.outside_input_down;
         self.outside_input_down = input_down;
         if ui.input(|i| i.focused) {
@@ -359,11 +430,15 @@ impl Hud {
         let action_id = action.id.clone();
         self.state = HudState::Processing {
             action_name: action_name.clone(),
+            started: std::time::Instant::now(),
         };
         std::thread::spawn(move || {
             let msg = match complete_action(&config, &instruction, &original, &lang) {
                 Ok(resp) => {
-                    let (diff_chunks, stats) = compute_diff(&original, &resp.text);
+                    let (diff_chunks, stats) = compute_diff(
+                        &crate::rich_text::readable(&original),
+                        &crate::rich_text::readable(&resp.text),
+                    );
                     HudWorkerMsg::Success {
                         refined_text: resp.text,
                         diff_chunks,
@@ -408,10 +483,12 @@ impl Hud {
                 duration_ms,
                 language,
             } => {
-                let hwnd = HWND(self.target_hwnd as *mut std::ffi::c_void);
                 let changed = self.original_text != refined_text;
-                let applied =
-                    changed && crate::clipboard::replace_selection_in_target(hwnd, &refined_text);
+                let applied = changed
+                    && crate::clipboard::replace_selection_in_target(
+                        target(self.target_hwnd),
+                        &refined_text,
+                    );
                 if changed && self.target_hwnd != 0 {
                     self.awaiting_paste_blur = true;
                     self.focus_requested = true;
@@ -832,7 +909,7 @@ impl Hud {
                     self.trigger_action(&ctx, action, Some(&input), groq_config, lang);
                 }
             }
-            HudState::Processing { action_name } => {
+            HudState::Processing { action_name, started } => {
                 let model_short = groq_config
                     .model
                     .split('/')
@@ -850,7 +927,10 @@ impl Hud {
                             .strong(),
                     );
                     ui.label(
-                        RichText::new(format!("Applying action: {action_name}"))
+                        RichText::new(format!(
+                            "Applying action: {action_name} · {:.1} s",
+                            started.elapsed().as_secs_f32()
+                        ))
                             .font(FontId::proportional(12.0))
                             .color(theme.text_secondary),
                     );
@@ -918,9 +998,16 @@ impl Hud {
                     .filter(|c| !matches!(c.kind, crate::diff::DiffKind::Equal))
                     .count();
                 let change_word = if changed == 1 { "change" } else { "changes" };
+                let placement = if *applied {
+                    " · replaced in your text"
+                } else if original_text != refined_text {
+                    " · not pasted, copy to use it"
+                } else {
+                    ""
+                };
                 ui.label(
                     RichText::new(format!(
-                        "{changed} {change_word} · replaced in your text — {} → {} words",
+                        "{changed} {change_word}{placement} — {} → {} words",
                         stats.original_words, stats.refined_words
                     ))
                     .font(FontId::proportional(12.0))
@@ -971,8 +1058,7 @@ impl Hud {
                                 input.consume_key(egui::Modifiers::CTRL, Key::Z)
                             }))
                     {
-                        let hwnd = HWND(self.target_hwnd as *mut std::ffi::c_void);
-                        if crate::clipboard::undo_in_target(hwnd) {
+                        if crate::clipboard::undo_in_target(target(self.target_hwnd)) {
                             should_close.set(true);
                         }
                     }
