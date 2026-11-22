@@ -26,6 +26,7 @@ Open **Settings** and paste a [Groq API key](https://console.groq.com/keys). Ref
 ## Use
 
 - **Ctrl+Shift+X** opens the palette when text is selected. Use the number keys or **↑ / ↓** and **Enter** to pick an action. Change the shortcut in Settings.
+- With nothing selected, **Ctrl+Shift+X** uses the text on your clipboard. The palette shows which text it will use, and the result goes back to the clipboard for you to paste. Images and files on the clipboard are left alone.
 - **Polish**, **Condense**, **Expand**, **Structure**, and **Simplify** edit your notes. **Flashcards** makes question-and-answer pairs for active recall. **Rewrite as…** takes your own instructions.
 - Drag the Refined header to move the palette or diff. The diff shows what changed after the edit. Use **Undo** to ask the editor to undo the paste. **Esc** or a click outside closes the palette.
 - Subscripts and superscripts survive the edit. Refined reads them from Word, browsers, and Acrobat. When text from a PDF viewer arrives flattened, as in `Bn+1`, the model restores the notation where it is clear. Typed notation such as `B_n` or `x^2` becomes real formatting. Plain-text editors receive characters such as Bₙ₊₁ and x².

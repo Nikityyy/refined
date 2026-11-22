@@ -19,6 +19,7 @@ pub struct TriggerPayload {
     pub cursor_x: i32,
     pub cursor_y: i32,
     pub target_hwnd: isize,
+    pub source: crate::hud::Source,
 }
 
 /// X keysym of the settings key ("X", "4", "F3").
@@ -44,7 +45,7 @@ fn modifiers(cfg: &HotkeyConfig) -> Option<ModMask> {
     }
 }
 
-/// Captures the highlighted text and opens the palette at the pointer.
+/// Captures the highlighted or copied text and opens the palette at the pointer.
 pub fn trigger(ctx: &eframe::egui::Context, sender: &Sender<TriggerPayload>) {
     let Some(cap) = crate::clipboard::capture_selection_with_window() else { return };
     let (cursor_x, cursor_y) = crate::x11::pointer().map_or_else(
@@ -57,6 +58,7 @@ pub fn trigger(ctx: &eframe::egui::Context, sender: &Sender<TriggerPayload>) {
             cursor_x,
             cursor_y,
             target_hwnd: cap.target_window,
+            source: cap.source,
         })
         .is_ok()
     {

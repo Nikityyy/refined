@@ -29,6 +29,7 @@ pub struct TriggerPayload {
     pub cursor_x: i32,
     pub cursor_y: i32,
     pub target_hwnd: isize,
+    pub source: crate::hud::Source,
 }
 
 /// Parses the settings key ("V", "4", "F3") into a Windows virtual key code.
@@ -152,7 +153,6 @@ pub fn start_hotkey_listener(
                     break;
                 }
                 if msg.message == WM_HOTKEY && msg.wParam.0 as i32 == HOTKEY_ID {
-                    // Hotkey triggered: only proceed if text is actively selected!
                     if let Some(cap) = capture_selection_with_window() {
                         let mut pt = POINT::default();
                         let _ = GetCursorPos(&mut pt);
@@ -161,6 +161,7 @@ pub fn start_hotkey_listener(
                             cursor_x: pt.x,
                             cursor_y: pt.y,
                             target_hwnd: cap.target_hwnd.0 as isize,
+                            source: cap.source,
                         });
                         // Wake the UI thread NOW so the palette opens
                         // immediately, not whenever the next frame happens.

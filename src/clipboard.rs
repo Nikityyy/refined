@@ -27,6 +27,7 @@ const CF_UNICODETEXT: u32 = 13;
 pub struct CapturedSelection {
     pub text: String,
     pub target_hwnd: HWND,
+    pub source: crate::hud::Source,
 }
 
 /// Reads the copied text, with `<sub>` and `<sup>` tags restored from the
@@ -198,10 +199,11 @@ fn send_control_key(key: VIRTUAL_KEY, release_modifiers: bool) -> bool {
     unsafe { SendInput(&inputs, std::mem::size_of::<INPUT>() as i32) == inputs.len() as u32 }
 }
 
-/// Captures selected text and target window handle.
-/// Only returns Some if text was actively selected.
-/// Never corrupts clipboard if nothing was selected.
+/// Captures the selected text and the target window. Without a selection,
+/// falls back to text already on the clipboard. Returns None only when
+/// focus moved away during the capture.
 pub fn capture_selection_with_window() -> Option<CapturedSelection> {
+    use crate::hud::Source;
     let target_hwnd = unsafe { GetForegroundWindow() };
     if target_hwnd.0.is_null() {
         return None;
@@ -240,17 +242,22 @@ pub fn capture_selection_with_window() -> Option<CapturedSelection> {
         }
     }
 
-    if changed && unsafe { GetForegroundWindow() } == target_hwnd {
-        if let Some(text) = get_selection_text() {
-            let trimmed = text.trim();
-            if !trimmed.is_empty() {
-                return Some(CapturedSelection { text, target_hwnd });
-            }
-        }
+    if unsafe { GetForegroundWindow() } != target_hwnd {
+        return None;
     }
-
-    // Nothing was selected; do NOT touch or empty clipboard!
-    None
+    // Without a selection the copy changed nothing, so the clipboard still
+    // holds what the user copied earlier. Images and files carry no text.
+    let text = get_selection_text().filter(|text| !text.trim().is_empty());
+    let source = match (&text, changed) {
+        (None, _) => Source::Nothing,
+        (Some(_), true) => Source::Selection,
+        (Some(_), false) => Source::Clipboard,
+    };
+    Some(CapturedSelection {
+        text: text.unwrap_or_default(),
+        target_hwnd,
+        source,
+    })
 }
 
 /// Copies a refinement with the same clipboard formats used for in-place replacement.

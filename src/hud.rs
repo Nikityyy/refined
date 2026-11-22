@@ -134,9 +134,23 @@ mod input {
 }
 
 pub const WIDTH: f32 = 480.0;
+/// The "Copied text" card above the actions, including its spacing.
+const SOURCE_CARD_HEIGHT: f32 = 62.0;
 
 pub fn viewport_id() -> egui::ViewportId {
     egui::ViewportId::from_hash_of("refined_hud")
+}
+
+/// Where the text being refined came from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Source {
+    /// Highlighted text, replaced in place.
+    Selection,
+    /// Text copied earlier, used when nothing is highlighted. The result
+    /// goes back to the clipboard; nothing is pasted.
+    Clipboard,
+    /// Neither: nothing highlighted and no text on the clipboard.
+    Nothing,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -158,6 +172,7 @@ pub enum HudState {
         model: String,
         duration_ms: u128,
         applied: bool,
+        copied: bool,
     },
 }
 
@@ -180,6 +195,7 @@ pub struct Hud {
     pub presented: bool,
     pub state: HudState,
     pub original_text: String,
+    pub source: Source,
     pub target_hwnd: isize,
     pub selected_index: usize,
     pub custom_rewrite_input: String,
@@ -245,6 +261,7 @@ impl Hud {
             presented: false,
             state: HudState::SelectingAction,
             original_text: String::new(),
+            source: Source::Selection,
             target_hwnd: 0,
             selected_index: 0,
             custom_rewrite_input: String::new(),
@@ -262,10 +279,11 @@ impl Hud {
         }
     }
 
-    pub fn open(&mut self, text: String, x: i32, y: i32, target_hwnd: isize) {
+    pub fn open(&mut self, text: String, source: Source, x: i32, y: i32, target_hwnd: isize) {
         // Invalidate any in-flight run from a previous HUD session.
         self.worker_rx = None;
         self.original_text = text;
+        self.source = source;
         self.target_hwnd = target_hwnd;
         self.is_visible = true;
         self.presented = false;
@@ -366,6 +384,9 @@ impl Hud {
     }
 
     pub fn desired_height(&self, settings: &AppSettings) -> f32 {
+        if self.source == Source::Nothing {
+            return 200.0;
+        }
         let action_rows = settings.actions.len().min(9);
         (48.0 + action_rows as f32 * 37.0).max(274.0)
             + if settings.selected_language == "custom" {
@@ -375,6 +396,11 @@ impl Hud {
             }
             + if self.error_message.is_some() {
                 72.0
+            } else {
+                0.0
+            }
+            + if self.source == Source::Clipboard {
+                SOURCE_CARD_HEIGHT
             } else {
                 0.0
             }
@@ -484,12 +510,18 @@ impl Hud {
                 language,
             } => {
                 let changed = self.original_text != refined_text;
+                let in_place = self.source == Source::Selection;
                 let applied = changed
+                    && in_place
                     && crate::clipboard::replace_selection_in_target(
                         target(self.target_hwnd),
                         &refined_text,
                     );
-                if changed && self.target_hwnd != 0 {
+                // Without a selection there is nothing to replace, so the
+                // result takes the copied text's place on the clipboard.
+                let copied =
+                    changed && !in_place && crate::clipboard::copy_refinement(&refined_text);
+                if changed && in_place && self.target_hwnd != 0 {
                     self.awaiting_paste_blur = true;
                     self.focus_requested = true;
                     self.seen_focus = false;
@@ -514,6 +546,7 @@ impl Hud {
                     model,
                     duration_ms,
                     applied,
+                    copied,
                 };
             }
             HudWorkerMsg::Error(err) => {
@@ -799,6 +832,85 @@ impl Hud {
 
         let should_close = std::cell::Cell::new(false);
 
+        if self.source == Source::Nothing {
+            let combo = format!("{}+{}", settings.hotkey.modifier, settings.hotkey.key);
+            ui.vertical_centered(|ui| {
+                ui.add_space(14.0);
+                ui.label(
+                    RichText::new("Nothing to refine")
+                        .font(FontId::proportional(15.0))
+                        .color(theme.text_primary)
+                        .strong(),
+                );
+                ui.add_space(4.0);
+                ui.label(
+                    RichText::new(format!(
+                        "Select text, or copy some text, then press {combo} again."
+                    ))
+                    .font(FontId::proportional(12.0))
+                    .color(theme.text_secondary),
+                );
+                ui.label(
+                    RichText::new("Images and files on the clipboard are left alone.")
+                        .font(FontId::proportional(12.0))
+                        .color(theme.text_tertiary),
+                );
+                ui.add_space(14.0);
+                if kbd_button(ui, None, "Close", Some("Esc"), true, theme).clicked() {
+                    should_close.set(true);
+                }
+            });
+            if should_close.get() {
+                self.close();
+            }
+            return;
+        }
+
+        if self.source == Source::Clipboard
+            && !matches!(self.state, HudState::DiffView { .. })
+        {
+            let preview = crate::rich_text::readable(&self.original_text);
+            let preview = preview.split_whitespace().collect::<Vec<_>>().join(" ");
+            let words = preview.split(' ').filter(|w| !w.is_empty()).count();
+            egui::Frame::new()
+                .fill(theme.surface_subtle)
+                .corner_radius(CornerRadius::same(6))
+                .inner_margin(egui::Margin::symmetric(10, 7))
+                .show(ui, |ui| {
+                    ui.set_width(ui.available_width());
+                    ui.horizontal(|ui| {
+                        ui.label(
+                            RichText::new(icons::COPY)
+                                .font(FontId::proportional(12.0))
+                                .color(theme.accent),
+                        );
+                        ui.label(
+                            RichText::new("Nothing selected, using your copied text")
+                                .font(FontId::proportional(12.0))
+                                .color(theme.text_primary)
+                                .strong(),
+                        );
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            let unit = if words == 1 { "word" } else { "words" };
+                            ui.label(
+                                RichText::new(format!("{words} {unit}"))
+                                    .font(FontId::proportional(12.0))
+                                    .color(theme.text_secondary),
+                            );
+                        });
+                    });
+                    ui.add(
+                        egui::Label::new(
+                            RichText::new(preview)
+                                .font(FontId::proportional(12.0))
+                                .color(theme.text_secondary),
+                        )
+                        .truncate(),
+                    );
+                });
+            ui.add_space(8.0);
+        }
+
         match &self.state {
             HudState::SelectingAction => {
                 let previous_index = self.selected_index;
@@ -952,9 +1064,12 @@ impl Hud {
                 model,
                 duration_ms,
                 applied,
+                copied,
             } => {
                 let status = if *applied || self.demo_sticky {
                     format!("{action_name} applied")
+                } else if *copied {
+                    format!("{action_name} copied")
                 } else if original_text == refined_text {
                     "No changes needed".into()
                 } else {
@@ -970,7 +1085,7 @@ impl Hud {
 
                 ui.horizontal(|ui| {
                     ui.label(
-                        RichText::new(if *applied || self.demo_sticky {
+                        RichText::new(if *applied || *copied || self.demo_sticky {
                             icons::CHECK_MARK
                         } else {
                             icons::COPY
@@ -1000,6 +1115,8 @@ impl Hud {
                 let change_word = if changed == 1 { "change" } else { "changes" };
                 let placement = if *applied {
                     " · replaced in your text"
+                } else if *copied {
+                    " · on your clipboard, paste with Ctrl+V"
                 } else if original_text != refined_text {
                     " · not pasted, copy to use it"
                 } else {

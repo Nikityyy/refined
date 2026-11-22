@@ -312,9 +312,12 @@ impl eframe::App for RefinedApp {
         self.root_window_hidden = studio_hidden;
 
         if let Some(payload) = self.hotkey_rx.try_iter().last() {
-            crate::groq::warm_up();
+            if payload.source != crate::hud::Source::Nothing {
+                crate::groq::warm_up();
+            }
             self.hud.lock().unwrap().open(
                 payload.selected_text,
+                payload.source,
                 payload.cursor_x,
                 payload.cursor_y,
                 payload.target_hwnd,
@@ -375,7 +378,7 @@ impl eframe::App for RefinedApp {
 because AI models are unable to distinguishes between facts and convincing-sounding \
 nonsense, which is a very serious problem for publishing.\n";
                 let mut hud = self.hud.lock().unwrap();
-                hud.open(sample.to_string(), 260, 180, 0);
+                hud.open(sample.to_string(), crate::hud::Source::Selection, 260, 180, 0);
                 hud.demo_sticky = true;
                 self.studio_open.store(true, Ordering::Relaxed);
                 ctx.request_repaint();

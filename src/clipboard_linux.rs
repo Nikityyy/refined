@@ -11,6 +11,7 @@ use std::sync::{Mutex, OnceLock};
 pub struct CapturedSelection {
     pub text: String,
     pub target_window: isize,
+    pub source: crate::hud::Source,
 }
 
 /// On X11 the clipboard owner must stay alive to serve pastes.
@@ -31,25 +32,29 @@ pub fn set_clipboard_text(text: &str) -> bool {
     clipboard().is_some_and(|mut clipboard| clipboard.set_text(text).is_ok())
 }
 
-/// Reads the highlighted text, with `<sub>` and `<sup>` tags restored from
-/// its HTML version when the source app offers one.
+/// Reads the highlighted text, or the clipboard text when nothing is
+/// highlighted, with `<sub>` and `<sup>` tags restored from the HTML
+/// version when the source app offers one. Images carry no text.
 pub fn capture_selection_with_window() -> Option<CapturedSelection> {
+    use crate::hud::Source;
     let mut clipboard = clipboard()?;
-    let text = clipboard
-        .get()
-        .clipboard(LinuxClipboardKind::Primary)
-        .text()
-        .ok()
-        .filter(|text| !text.trim().is_empty())?;
-    let html = clipboard
-        .get()
-        .clipboard(LinuxClipboardKind::Primary)
-        .html()
-        .ok();
-    drop(clipboard);
-    let text = crate::rich_text::mark_scripts(&text, html.as_deref(), None).unwrap_or(text);
+    let mut read = |kind: LinuxClipboardKind| {
+        let text = clipboard.get().clipboard(kind).text().ok()?;
+        if text.trim().is_empty() {
+            return None;
+        }
+        let html = clipboard.get().clipboard(kind).html().ok();
+        Some(crate::rich_text::mark_scripts(&text, html.as_deref(), None).unwrap_or(text))
+    };
+    let (text, source) = match read(LinuxClipboardKind::Primary) {
+        Some(text) => (text, Source::Selection),
+        None => match read(LinuxClipboardKind::Clipboard) {
+            Some(text) => (text, Source::Clipboard),
+            None => (String::new(), Source::Nothing),
+        },
+    };
     let target_window = crate::x11::active_window().map_or(0, |window| window as isize);
-    Some(CapturedSelection { text, target_window })
+    Some(CapturedSelection { text, target_window, source })
 }
 
 /// Copies a refinement with the same formats used for in-place replacement.
