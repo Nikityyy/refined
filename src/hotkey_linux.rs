@@ -4,6 +4,7 @@
 //! shortcut that runs `refined --trigger` opens the palette instead
 //! (see [`trigger`]).
 
+use crate::hud::HotkeyEvent;
 use crate::store::HotkeyConfig;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::Sender;
@@ -20,6 +21,8 @@ pub struct TriggerPayload {
     pub cursor_y: i32,
     pub target_hwnd: isize,
     pub source: crate::hud::Source,
+    /// Always false: the primary selection answers at once.
+    pub detecting: bool,
 }
 
 /// X keysym of the settings key ("X", "4", "F3").
@@ -46,20 +49,21 @@ fn modifiers(cfg: &HotkeyConfig) -> Option<ModMask> {
 }
 
 /// Captures the highlighted or copied text and opens the palette at the pointer.
-pub fn trigger(ctx: &eframe::egui::Context, sender: &Sender<TriggerPayload>) {
+pub fn trigger(ctx: &eframe::egui::Context, sender: &Sender<HotkeyEvent>) {
     let Some(cap) = crate::clipboard::capture_selection_with_window() else { return };
     let (cursor_x, cursor_y) = crate::x11::pointer().map_or_else(
         || crate::x11::screen_size().map_or((400, 300), |(w, h)| (w / 2, h / 3)),
         |(x, y, _)| (x, y),
     );
     if sender
-        .send(TriggerPayload {
+        .send(HotkeyEvent::Open(TriggerPayload {
             selected_text: cap.text,
             cursor_x,
             cursor_y,
             target_hwnd: cap.target_window,
             source: cap.source,
-        })
+            detecting: false,
+        }))
         .is_ok()
     {
         ctx.request_repaint_of(eframe::egui::ViewportId::ROOT);
@@ -68,7 +72,7 @@ pub fn trigger(ctx: &eframe::egui::Context, sender: &Sender<TriggerPayload>) {
 
 pub fn start_hotkey_listener(
     ctx: eframe::egui::Context,
-    sender: Sender<TriggerPayload>,
+    sender: Sender<HotkeyEvent>,
     hotkey: Arc<Mutex<HotkeyConfig>>,
     hotkey_version: Arc<AtomicU64>,
     stopping: Arc<AtomicBool>,

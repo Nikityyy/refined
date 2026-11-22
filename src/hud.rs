@@ -141,6 +141,25 @@ pub fn viewport_id() -> egui::ViewportId {
     egui::ViewportId::from_hash_of("refined_hud")
 }
 
+/// Messages from the shortcut listener to the palette. Only Windows sends
+/// the check results; Linux reads the primary selection at once.
+#[cfg_attr(not(windows), allow(dead_code))]
+pub enum HotkeyEvent {
+    Open(crate::hotkey::TriggerPayload),
+    /// A slow app answered the copy after the palette opened.
+    SelectionFound(String),
+    /// The check finished without finding a selection.
+    SelectionChecked,
+}
+
+/// An action picked while the selection check was still running.
+struct QueuedRun {
+    action: ActionItem,
+    user_override: Option<String>,
+    config: GroqConfig,
+    language: String,
+}
+
 /// Where the text being refined came from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Source {
@@ -198,6 +217,10 @@ pub struct Hud {
     pub source: Source,
     /// Paste a result made from copied text at the cursor (Settings).
     pub paste_copied: bool,
+    /// The palette opened before the selection check finished; see
+    /// [`HotkeyEvent::SelectionFound`].
+    detecting: bool,
+    queued_run: Option<QueuedRun>,
     /// Window height that fits the diff without empty space, measured in
     /// the last frame, so a short diff gets a short window.
     diff_fit_height: Option<f32>,
@@ -269,6 +292,8 @@ impl Hud {
             source: Source::Selection,
             paste_copied: true,
             diff_fit_height: None,
+            detecting: false,
+            queued_run: None,
             target_hwnd: 0,
             selected_index: 0,
             custom_rewrite_input: String::new(),
@@ -286,11 +311,21 @@ impl Hud {
         }
     }
 
-    pub fn open(&mut self, text: String, source: Source, x: i32, y: i32, target_hwnd: isize) {
+    pub fn open(
+        &mut self,
+        text: String,
+        source: Source,
+        detecting: bool,
+        x: i32,
+        y: i32,
+        target_hwnd: isize,
+    ) {
         // Invalidate any in-flight run from a previous HUD session.
         self.worker_rx = None;
         self.original_text = text;
         self.source = source;
+        self.detecting = detecting;
+        self.queued_run = None;
         self.diff_fit_height = None;
         self.target_hwnd = target_hwnd;
         self.is_visible = true;
@@ -318,6 +353,24 @@ impl Hud {
         self.custom_rewrite_input = String::new();
         // Invalidate any in-flight worker so its completion is dropped.
         self.worker_rx = None;
+        self.detecting = false;
+        self.queued_run = None;
+    }
+
+    /// Applies the result of the selection check. A late selection replaces
+    /// the copied text, and an action picked meanwhile starts now.
+    pub fn resolve_selection(&mut self, ctx: &egui::Context, selection: Option<String>) {
+        if !self.is_visible || !std::mem::take(&mut self.detecting) {
+            return;
+        }
+        if let Some(text) = selection {
+            self.original_text = text;
+            self.source = Source::Selection;
+        }
+        if let Some(run) = self.queued_run.take() {
+            self.trigger_action(ctx, &run.action, run.user_override.as_deref(), &run.config, &run.language);
+        }
+        ctx.request_repaint_of(viewport_id());
     }
 
     pub fn present(&mut self, ctx: &egui::Context) {
@@ -445,6 +498,22 @@ impl Hud {
         groq_config: &GroqConfig,
         language: &str,
     ) {
+        if self.detecting {
+            // Wait for the selection check, so the result never lands on a
+            // selection the palette did not know about.
+            self.queued_run = Some(QueuedRun {
+                action: action.clone(),
+                user_override: user_override.map(str::to_owned),
+                config: groq_config.clone(),
+                language: language.to_owned(),
+            });
+            self.error_message = None;
+            self.state = HudState::Processing {
+                action_name: action.name.clone(),
+                started: std::time::Instant::now(),
+            };
+            return;
+        }
         let original = self.original_text.clone();
         let config = groq_config.clone();
         let lang = language.to_string();
@@ -1235,5 +1304,40 @@ impl Hud {
         if should_close.get() {
             self.close();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn action_picked_during_the_check_waits_and_uses_a_late_selection() {
+        let ctx = egui::Context::default();
+        let actions = crate::actions::default_actions();
+        let config = GroqConfig::default();
+        let mut hud = Hud::new();
+        hud.open("copied".into(), Source::Clipboard, true, 0, 0, 0);
+
+        hud.activate(&ctx, &actions, 0, &config, "auto");
+        assert!(matches!(hud.state, HudState::Processing { .. }));
+        assert!(hud.queued_run.is_some() && hud.worker_rx.is_none());
+
+        hud.resolve_selection(&ctx, Some("selected".into()));
+        assert_eq!((hud.source, hud.original_text.as_str()), (Source::Selection, "selected"));
+        assert!(hud.queued_run.is_none() && hud.worker_rx.is_some());
+
+        // A result for an older palette session changes nothing.
+        hud.resolve_selection(&ctx, Some("late".into()));
+        assert_eq!(hud.original_text, "selected");
+    }
+
+    #[test]
+    fn without_a_late_selection_the_copied_text_stays() {
+        let ctx = egui::Context::default();
+        let mut hud = Hud::new();
+        hud.open("copied".into(), Source::Clipboard, true, 0, 0, 0);
+        hud.resolve_selection(&ctx, None);
+        assert_eq!((hud.source, hud.original_text.as_str()), (Source::Clipboard, "copied"));
     }
 }

@@ -1,7 +1,6 @@
 //! Refined application root: manages HUD viewport, Studio window, tray icon, and hotkey triggers.
 
-use crate::hotkey::TriggerPayload;
-use crate::hud::Hud;
+use crate::hud::{Hud, HotkeyEvent};
 use crate::store::{HotkeyConfig, Store, ThemeMode};
 use crate::studio::Studio;
 #[cfg(feature = "demo")]
@@ -70,7 +69,7 @@ pub struct RefinedApp {
     pub studio: Studio,
     pub studio_open: Arc<AtomicBool>,
     pub _tray: Tray,
-    pub hotkey_rx: Receiver<TriggerPayload>,
+    pub hotkey_rx: Receiver<HotkeyEvent>,
     pub hotkey_failed: Arc<AtomicBool>,
     pub quitting: Arc<AtomicBool>,
     #[cfg(windows)]
@@ -311,7 +310,18 @@ impl eframe::App for RefinedApp {
         }
         self.root_window_hidden = studio_hidden;
 
-        if let Some(payload) = self.hotkey_rx.try_iter().last() {
+        for event in self.hotkey_rx.try_iter() {
+            let payload = match event {
+                HotkeyEvent::Open(payload) => payload,
+                HotkeyEvent::SelectionFound(text) => {
+                    self.hud.lock().unwrap().resolve_selection(ctx, Some(text));
+                    continue;
+                }
+                HotkeyEvent::SelectionChecked => {
+                    self.hud.lock().unwrap().resolve_selection(ctx, None);
+                    continue;
+                }
+            };
             if payload.source != crate::hud::Source::Nothing {
                 crate::groq::warm_up();
             }
@@ -321,6 +331,7 @@ impl eframe::App for RefinedApp {
             hud.open(
                 payload.selected_text,
                 payload.source,
+                payload.detecting,
                 payload.cursor_x,
                 payload.cursor_y,
                 payload.target_hwnd,
@@ -381,7 +392,7 @@ impl eframe::App for RefinedApp {
 because AI models are unable to distinguishes between facts and convincing-sounding \
 nonsense, which is a very serious problem for publishing.\n";
                 let mut hud = self.hud.lock().unwrap();
-                hud.open(sample.to_string(), crate::hud::Source::Selection, 260, 180, 0);
+                hud.open(sample.to_string(), crate::hud::Source::Selection, false, 260, 180, 0);
                 hud.demo_sticky = true;
                 self.studio_open.store(true, Ordering::Relaxed);
                 ctx.request_repaint();

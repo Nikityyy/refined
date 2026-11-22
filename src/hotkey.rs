@@ -7,6 +7,7 @@
 //! back to the previous combo if the new one is already taken.
 
 use crate::clipboard::capture_selection_with_window;
+use crate::hud::HotkeyEvent;
 use crate::store::HotkeyConfig;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::Sender;
@@ -30,6 +31,8 @@ pub struct TriggerPayload {
     pub cursor_y: i32,
     pub target_hwnd: isize,
     pub source: crate::hud::Source,
+    /// The selection check is still running; its result follows.
+    pub detecting: bool,
 }
 
 /// Parses the settings key ("V", "4", "F3") into a Windows virtual key code.
@@ -125,7 +128,7 @@ unsafe fn apply_combo(
 /// and the HUD opens arbitrarily late.
 pub fn start_hotkey_listener(
     ctx: eframe::egui::Context,
-    sender: Sender<TriggerPayload>,
+    sender: Sender<HotkeyEvent>,
     hotkey: Arc<Mutex<HotkeyConfig>>,
     hotkey_version: Arc<AtomicU64>,
     stopping: Arc<AtomicBool>,
@@ -153,19 +156,27 @@ pub fn start_hotkey_listener(
                     break;
                 }
                 if msg.message == WM_HOTKEY && msg.wParam.0 as i32 == HOTKEY_ID {
-                    if let Some(cap) = capture_selection_with_window() {
+                    if let Some((cap, pending)) = capture_selection_with_window() {
                         let mut pt = POINT::default();
                         let _ = GetCursorPos(&mut pt);
-                        let _ = sender.send(TriggerPayload {
+                        let _ = sender.send(HotkeyEvent::Open(TriggerPayload {
                             selected_text: cap.text,
                             cursor_x: pt.x,
                             cursor_y: pt.y,
                             target_hwnd: cap.target_hwnd.0 as isize,
                             source: cap.source,
-                        });
+                            detecting: pending.is_some(),
+                        }));
                         // Wake the UI thread NOW so the palette opens
                         // immediately, not whenever the next frame happens.
                         ctx.request_repaint_of(eframe::egui::ViewportId::ROOT);
+                        if let Some(pending) = pending {
+                            let _ = sender.send(match pending.finish() {
+                                Some(text) => HotkeyEvent::SelectionFound(text),
+                                None => HotkeyEvent::SelectionChecked,
+                            });
+                            ctx.request_repaint_of(eframe::egui::ViewportId::ROOT);
+                        }
                     }
                 }
                 let _ = TranslateMessage(&msg);

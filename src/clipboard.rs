@@ -199,49 +199,39 @@ fn send_control_key(key: VIRTUAL_KEY, release_modifiers: bool) -> bool {
     unsafe { SendInput(&inputs, std::mem::size_of::<INPUT>() as i32) == inputs.len() as u32 }
 }
 
-/// Captures the selected text and the target window. Without a selection,
-/// falls back to text already on the clipboard. Returns None only when
-/// focus moved away during the capture.
-pub fn capture_selection_with_window() -> Option<CapturedSelection> {
+/// Most apps answer Ctrl+C within this time. Without an answer by then,
+/// the palette opens with the clipboard text while [`PendingSelection`]
+/// keeps watching for a slow app's copy.
+const QUICK_COPY: Duration = Duration::from_millis(60);
+/// Heavy documents can take longer; the first copy gets this long in total.
+const FIRST_COPY: Duration = Duration::from_millis(120);
+/// A second Ctrl+C for apps that dropped the first, with its own budget.
+const SECOND_COPY: Duration = Duration::from_millis(300);
+
+fn clipboard_changed(old_seq: u32, budget: Duration, poll: Duration, since: std::time::Instant) -> bool {
+    while since.elapsed() < budget {
+        if unsafe { GetClipboardSequenceNumber() } != old_seq {
+            return true;
+        }
+        sleep(poll);
+    }
+    unsafe { GetClipboardSequenceNumber() != old_seq }
+}
+
+/// Captures the selected text and the target window. Without a quick
+/// answer to Ctrl+C, returns the clipboard text at once, together with a
+/// [`PendingSelection`] that finishes checking for a selection. Returns
+/// None only when focus moved away during the capture.
+pub fn capture_selection_with_window() -> Option<(CapturedSelection, Option<PendingSelection>)> {
     use crate::hud::Source;
     let target_hwnd = unsafe { GetForegroundWindow() };
     if target_hwnd.0.is_null() {
         return None;
     }
-
     let old_seq = unsafe { GetClipboardSequenceNumber() };
-
     send_control_key(VK_C, true);
-
-    // Poll for the clipboard sequence change. Heavy applications (big
-    // Word documents, some terminals) take longer than one fast poll
-    // window, so if nothing changed yet, fire a second Ctrl+C and wait a
-    // longer second round instead of giving up silently.
-    let start = std::time::Instant::now();
-    let mut changed = false;
-    while start.elapsed() < Duration::from_millis(120) {
-        let seq = unsafe { GetClipboardSequenceNumber() };
-        if seq != old_seq {
-            changed = true;
-            break;
-        }
-        sleep(Duration::from_millis(8));
-    }
-    if !changed && unsafe { GetForegroundWindow() } == target_hwnd {
-        send_control_key(VK_C, true);
-        // A fresh window: slow responders (heavy Word documents, some
-        // terminals) need their own budget, not the tail of round one.
-        let second = std::time::Instant::now();
-        while second.elapsed() < Duration::from_millis(300) {
-            let seq = unsafe { GetClipboardSequenceNumber() };
-            if seq != old_seq {
-                changed = true;
-                break;
-            }
-            sleep(Duration::from_millis(16));
-        }
-    }
-
+    let started = std::time::Instant::now();
+    let changed = clipboard_changed(old_seq, QUICK_COPY, Duration::from_millis(4), started);
     if unsafe { GetForegroundWindow() } != target_hwnd {
         return None;
     }
@@ -253,11 +243,54 @@ pub fn capture_selection_with_window() -> Option<CapturedSelection> {
         (Some(_), true) => Source::Selection,
         (Some(_), false) => Source::Clipboard,
     };
-    Some(CapturedSelection {
+    let capture = CapturedSelection {
         text: text.unwrap_or_default(),
         target_hwnd,
         source,
-    })
+    };
+    let pending = (!changed).then_some(PendingSelection {
+        target_hwnd,
+        old_seq,
+        started,
+    });
+    Some((capture, pending))
+}
+
+/// The rest of the selection check after the palette has opened.
+pub struct PendingSelection {
+    target_hwnd: HWND,
+    old_seq: u32,
+    started: std::time::Instant,
+}
+
+impl PendingSelection {
+    /// Waits out the copy budgets. Returns the selected text if a slow app
+    /// answered after all, or None when nothing was selected.
+    pub fn finish(self) -> Option<String> {
+        let mut changed =
+            clipboard_changed(self.old_seq, FIRST_COPY, Duration::from_millis(8), self.started);
+        if !changed {
+            if unsafe { GetForegroundWindow() } == self.target_hwnd {
+                send_control_key(VK_C, true);
+                let second = std::time::Instant::now();
+                changed =
+                    clipboard_changed(self.old_seq, SECOND_COPY, Duration::from_millis(16), second);
+            } else {
+                // The palette has focus, so a second copy would not reach the
+                // editor. The first one, already queued there, gets the time.
+                changed = clipboard_changed(
+                    self.old_seq,
+                    FIRST_COPY + SECOND_COPY,
+                    Duration::from_millis(16),
+                    self.started,
+                );
+            }
+        }
+        changed
+            .then(get_selection_text)
+            .flatten()
+            .filter(|text| !text.trim().is_empty())
+    }
 }
 
 /// Copies a refinement with the same clipboard formats used for in-place replacement.
