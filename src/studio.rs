@@ -32,6 +32,8 @@ pub struct Studio {
     pub history_search: String,
     pub history_action_filter: String,
     expanded_history: Option<(String, Vec<crate::diff::DiffChunk>)>,
+    /// Height of the taller Statistics chart card.
+    stats_card_height: f32,
     catalog_key: String,
     catalog_error: Option<String>,
     models_rx: Option<Receiver<Result<Vec<GroqModel>, String>>>,
@@ -68,6 +70,7 @@ impl Studio {
             history_search: String::new(),
             history_action_filter: "All".to_string(),
             expanded_history: None,
+            stats_card_height: 0.0,
             catalog_key: String::new(),
             catalog_error: None,
             models_rx: None,
@@ -385,7 +388,7 @@ impl Studio {
 
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 if !store.history.is_empty()
-                    && spectrum_button(ui, Some(icons::TRASH), "Clear All History", false, theme)
+                    && spectrum_button(ui, Some(icons::TRASH), "Clear history", false, theme)
                         .clicked()
                 {
                     store.clear_history();
@@ -425,7 +428,7 @@ impl Studio {
                     [220.0, 26.0],
                     egui::TextEdit::singleline(&mut self.history_search)
                         .align(Align2::LEFT_CENTER)
-                        .hint_text("Search refinements..."),
+                        .hint_text("Search history"),
                 );
                 ui.label(
                     RichText::new(icons::SEARCH)
@@ -484,7 +487,7 @@ impl Studio {
         if filtered.is_empty() {
             ui.vertical_centered(|ui| {
                 ui.add_space(40.0);
-                ui.label(RichText::new("No matching refinements found.").color(theme.text_secondary));
+                ui.label(RichText::new("No refinements match your search.").color(theme.text_secondary));
             });
             return;
         }
@@ -547,7 +550,10 @@ impl Studio {
                                 );
 
                                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                                    if ui.add_sized([26.0, 22.0], egui::Button::new(RichText::new(icons::TRASH).color(theme.diff_del_text)).fill(Color32::TRANSPARENT).stroke(Stroke::NONE)).on_hover_text("Delete this entry").clicked() {
+                                    if spectrum_button_compact(ui, Some(icons::TRASH), "Delete", false, theme)
+                                        .on_hover_text("Delete this entry")
+                                        .clicked()
+                                    {
                                         delete_id = Some(entry.id.clone());
                                     }
 
@@ -693,17 +699,17 @@ impl Studio {
             (
                 "Refinements",
                 fmt_thousands(stats.total_refinements),
-                "total AI operations".to_string(),
+                "edits completed".to_string(),
             ),
             (
-                "Est. editing time saved",
+                "Editing time saved",
                 format!("{:.1} min", stats.estimated_minutes_saved),
                 "manual rework avoided".to_string(),
             ),
             (
-                "Avg latency",
+                "Average response",
                 format!("{} ms", fmt_thousands(stats.average_latency_ms as usize)),
-                "Groq inference speed".to_string(),
+                "Groq request to answer".to_string(),
             ),
         ];
 
@@ -727,7 +733,9 @@ impl Studio {
         let left_w = (available_w - col_gap - frame_margins) * 0.58;
         let right_w = (available_w - col_gap - frame_margins) * 0.42;
 
-        ui.horizontal(|ui| {
+        // Both cards take the taller one's height, so their edges line up.
+        let card_height = self.stats_card_height.max(200.0);
+        let row = ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing = Vec2::new(col_gap, 0.0);
 
             // Left Column: Interactive 7-Day Activity Chart
@@ -738,7 +746,7 @@ impl Studio {
                     // into one row. The body must be vertical.
                     ui.vertical(|ui| {
                         ui.set_width(left_w);
-                        ui.set_min_height(200.0);
+                        ui.set_min_height(card_height);
 
                         ui.label(
                             RichText::new("Refinements per day")
@@ -776,8 +784,10 @@ impl Studio {
                             .max()
                             .unwrap_or(1)
                             .max(1) as f32;
-                        let plot_h = 120.0;
                         let label_band = 22.0;
+                        // The chart fills the card down to its bottom edge.
+                        let used = ui.cursor().top() - ui.min_rect().top();
+                        let plot_h = (card_height - used - label_band).max(120.0);
                         let (plot_rect, _) = ui.allocate_exact_size(
                             Vec2::new(ui.available_width(), plot_h + label_band),
                             Sense::hover(),
@@ -838,7 +848,7 @@ impl Studio {
                 .show(ui, |ui| {
                     ui.vertical(|ui| {
                         ui.set_width(right_w);
-                        ui.set_min_height(200.0);
+                        ui.set_min_height(card_height);
 
                         ui.label(
                             RichText::new("Action distribution")
@@ -882,7 +892,8 @@ impl Studio {
                                 rows.push((k.clone(), *v));
                             }
                         }
-                        rows.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+                        // Stable: ties keep the order of the actions list.
+                        rows.sort_by(|a, b| b.1.cmp(&a.1));
 
                         // Beyond 7 rows the tail rolls into "Other" so the
                         // percentages still sum to 100 instead of silently
@@ -917,6 +928,11 @@ impl Studio {
                     });
                 });
         });
+        let tallest = row.response.rect.height() - 34.0;
+        if tallest > self.stats_card_height + 0.5 {
+            self.stats_card_height = tallest;
+            ui.ctx().request_repaint();
+        }
     }
 
     fn render_actions_tab(&mut self, ui: &mut Ui, store: &mut Store, theme: &SpectrumTheme) {
@@ -929,7 +945,7 @@ impl Studio {
             );
 
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                if spectrum_button(ui, Some(icons::ADD), "Add Custom Action", true, theme)
+                if spectrum_button(ui, Some(icons::ADD), "Add action", true, theme)
                     .clicked()
                 {
                     self.new_action_dialog_open = true;
@@ -939,7 +955,7 @@ impl Studio {
                     self.new_action_prompt.clear();
                 }
 
-                if spectrum_button(ui, Some(icons::REFRESH), "Reset All to Defaults", false, theme)
+                if spectrum_button(ui, Some(icons::REFRESH), "Reset all", false, theme)
                     .clicked()
                 {
                     store.reset_all_actions();
@@ -964,7 +980,7 @@ impl Studio {
                 .inner_margin(egui::Margin::same(16))
                 .show(ui, |ui| {
                     ui.label(
-                        RichText::new("Create New Action")
+                        RichText::new("New action")
                             .font(FontId::proportional(14.0))
                             .color(theme.accent)
                             .strong(),
@@ -972,13 +988,13 @@ impl Studio {
                     ui.add_space(8.0);
 
                     ui.horizontal(|ui| {
-                        ui.label(RichText::new("Name:").font(FontId::proportional(12.0)).color(theme.text_secondary));
+                        ui.label(RichText::new("Name").font(FontId::proportional(12.0)).color(theme.text_secondary));
                         ui.add_sized([160.0, 24.0], egui::TextEdit::singleline(&mut self.new_action_name).align(Align2::LEFT_CENTER).hint_text("e.g. Formalize"));
                     });
 
                     ui.add_space(6.0);
                     ui.horizontal_wrapped(|ui| {
-                        ui.label(RichText::new("Icon:").font(FontId::proportional(12.0)).color(theme.text_secondary));
+                        ui.label(RichText::new("Icon").font(FontId::proportional(12.0)).color(theme.text_secondary));
                         for icon in crate::theme::ACTION_ICONS {
                             let label = RichText::new(icon).font(FontId::proportional(14.0)).color(theme.text_primary);
                             if ui.selectable_label(self.new_action_icon == icon, label).clicked() {
@@ -989,12 +1005,12 @@ impl Studio {
 
                     ui.add_space(6.0);
                     ui.horizontal(|ui| {
-                        ui.label(RichText::new("Description:").font(FontId::proportional(12.0)).color(theme.text_secondary));
+                        ui.label(RichText::new("Description").font(FontId::proportional(12.0)).color(theme.text_secondary));
                         ui.add_sized([ui.available_width() - 80.0, 24.0], egui::TextEdit::singleline(&mut self.new_action_desc).align(Align2::LEFT_CENTER).hint_text("Brief summary of what this action does"));
                     });
 
                     ui.add_space(6.0);
-                    ui.label(RichText::new("Prompt Instruction:").font(FontId::proportional(12.0)).color(theme.text_secondary));
+                    ui.label(RichText::new("Prompt").font(FontId::proportional(12.0)).color(theme.text_secondary));
                     ui.add(
                         egui::TextEdit::multiline(&mut self.new_action_prompt)
                             .desired_rows(3)
@@ -1091,7 +1107,7 @@ impl Studio {
                                     }
 
                                     if action.is_modified() {
-                                        if spectrum_button(ui, Some(icons::REFRESH), "Reset to Default", false, theme).clicked() {
+                                        if spectrum_button(ui, Some(icons::REFRESH), "Reset to default", false, theme).clicked() {
                                             reset_action_id = Some(action.id.clone());
                                         }
                                     }
@@ -1130,7 +1146,9 @@ impl Studio {
                                     }
 
                                     if !action.shortcut.is_empty() {
-                                        spectrum_badge(ui, &format!("Key: {}", action.shortcut), theme.surface_subtle, theme.text_primary);
+                                        ui.scope(|ui| spectrum_badge(ui, &action.shortcut, theme.surface_subtle, theme.text_primary))
+                                            .response
+                                            .on_hover_text(format!("Press {} in the palette", action.shortcut));
                                     }
                                 });
                             });
@@ -1143,7 +1161,7 @@ impl Studio {
 
                             ui.add_space(6.0);
                             ui.label(
-                                RichText::new("System Instruction / Prompt:")
+                                RichText::new("Prompt")
                                     .font(FontId::proportional(12.0))
                                     .color(theme.text_tertiary),
                             );
@@ -1244,7 +1262,7 @@ impl Studio {
                     ui.set_width(ui.available_width());
 
                     ui.label(
-                        RichText::new("Groq API Key")
+                        RichText::new("Groq API key")
                             .font(FontId::proportional(14.0))
                             .color(theme.text_primary)
                             .strong(),
@@ -1333,7 +1351,7 @@ impl Studio {
                         ui.label(RichText::new(error).size(12.0).color(theme.diff_del_text));
                     } else {
                         let status = if self.models_rx.is_some() {
-                            "Checking Groq for available models".to_owned()
+                            "Checking Groq for available models...".to_owned()
                         } else if store.settings.groq.models.is_empty() {
                             "Enter your API key to load models.".to_owned()
                         } else {
@@ -1350,14 +1368,21 @@ impl Studio {
                 let config = &mut store.settings.groq;
                 let models = config.models.clone();
                 ui.horizontal(|ui| {
-                    ui.label(RichText::new("Model behavior").size(15.0).strong());
+                    ui.label(
+                        RichText::new("Model behavior")
+                            .font(FontId::proportional(14.0))
+                            .color(theme.text_primary)
+                            .strong(),
+                    );
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                         for (label, model, detail) in [
                             ("Study preset", "openai/gpt-oss-120b", "GPT-OSS 120B with low reasoning. Best balanced result in the study benchmark."),
                             ("Quick edits", DEFAULT_MODEL, "GPT-OSS 20B with low reasoning. A faster option for short edits."),
                         ] {
+                            // The preset in use reads as selected.
+                            let active = config.model == model && config.reasoning_effort == "low";
                             ui.add_enabled_ui(models.iter().any(|entry| entry.id == model), |ui| {
-                                if spectrum_button_compact(ui, None, label, false, theme).on_hover_text(detail).clicked() {
+                                if spectrum_button_compact(ui, active.then_some(icons::CHECK_MARK), label, active, theme).on_hover_text(detail).clicked() {
                                     config.model = model.into();
                                     config.reasoning_effort = "low".into();
                                     self.mark_settings_dirty();
@@ -1366,6 +1391,11 @@ impl Studio {
                         }
                     });
                 });
+                ui.label(
+                    RichText::new("Low reasoning answers fastest. Higher levels think longer before answering.")
+                        .font(FontId::proportional(12.0))
+                        .color(theme.text_secondary),
+                );
                 ui.add_space(10.0);
 
                 egui::Grid::new("groq_model_settings").num_columns(2).spacing([16.0, 8.0]).show(ui, |ui| {
@@ -1477,13 +1507,13 @@ impl Studio {
 
                     ui.horizontal(|ui| {
                         ui.label(
-                            RichText::new("Global System Prompt")
+                            RichText::new("System prompt")
                                 .font(FontId::proportional(14.0))
                                 .color(theme.text_primary)
                                 .strong(),
                         );
                         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                            if spectrum_button(ui, Some(icons::REFRESH), "Reset to Default", false, theme)
+                            if spectrum_button(ui, Some(icons::REFRESH), "Reset to default", false, theme)
                                 .clicked()
                             {
                                 store.settings.groq.global_system_prompt = GroqConfig::default().global_system_prompt;
@@ -1512,7 +1542,7 @@ impl Studio {
                     ui.set_width(ui.available_width());
 
                     ui.label(
-                        RichText::new(format!("Appearance & {OS_NAME} Integration"))
+                        RichText::new(format!("Appearance and {OS_NAME}"))
                             .font(FontId::proportional(14.0))
                             .color(theme.text_primary)
                             .strong(),
@@ -1538,7 +1568,7 @@ impl Studio {
                         );
 
                         let half = rect.split_left_right_at_x(rect.center().x);
-                        let segments = [("Dark Mode", true), ("Light Mode", false)];
+                        let segments = [("Dark", true), ("Light", false)];
 
                         let mut picked: Option<ThemeMode> = None;
                         for (i, (label, is_dark_mode)) in segments.iter().enumerate() {
@@ -1614,7 +1644,7 @@ impl Studio {
                     // Global shortcut picker. Changes apply instantly: the
                     // hotkey thread re-registers when it sees the new combo.
                     ui.label(
-                        RichText::new("Global Shortcut")
+                        RichText::new("Shortcut")
                             .font(FontId::proportional(13.0))
                             .color(theme.text_primary)
                             .strong(),
